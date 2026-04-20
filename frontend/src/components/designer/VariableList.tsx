@@ -1,210 +1,150 @@
-import { useState } from 'react'
+import { useEffect, useRef } from 'react'
+import type * as MonacoType from 'monaco-editor'
 import type { Variable } from '../../types/project'
-import { Button } from '../ui/Button'
-import { Modal } from '../ui/Modal'
-import { Input } from '../ui/Input'
-import { PrintBatchTable } from './PrintBatchTable'
 
 interface VariableListProps {
   variables: Variable[]
   values: Record<string, string>
   onChange: (vars: Variable[]) => void
   onValuesChange: (values: Record<string, string>) => void
+  onTextChange: (text: string) => void
   printRows: Record<string, string>[]
   activePrintRow: number
   onPrintRowsChange: (rows: Record<string, string>[]) => void
   onActivePrintRowChange: (index: number) => void
+  initialText: string
+  syncKey: string
 }
 
-const TYPE_COLORS: Record<Variable['type'], string> = {
-  text: 'bg-blue-600/30 text-blue-300',
-  number: 'bg-yellow-600/30 text-yellow-300',
-  url: 'bg-green-600/30 text-green-300',
+// CSV format:
+//   line 0 = variable names
+//   lines 1+ = data rows (all are print rows; line 1 drives canvas preview by default)
+
+function serialize(variables: Variable[], printRows: Record<string, string>[]): string {
+  const header = variables.map((v) => v.name).join(',')
+  const rows = printRows.map((row) => variables.map((v) => row[v.name] ?? '').join(','))
+  return [header, ...rows].join('\n')
 }
 
-export function VariableList({ variables, values, onChange, onValuesChange, printRows, activePrintRow, onPrintRowsChange, onActivePrintRowChange }: VariableListProps) {
-  const [collapsed, setCollapsed] = useState(false)
-  const [showAdd, setShowAdd] = useState(false)
-  const [showBatch, setShowBatch] = useState(false)
-  const [editTarget, setEditTarget] = useState<Variable | null>(null)
+function parseCSV(text: string): {
+  variables: Variable[]
+  values: Record<string, string>
+  printRows: Record<string, string>[]
+} {
+  const lines = text.split('\n')
+  const [headerLine = '', ...rowLines] = lines
+  const varNames = headerLine.split(',').map((s) => s.trim()).filter(Boolean)
+  const variables: Variable[] = varNames.map((name) => ({ name, type: 'text' as const, default: '' }))
+  const printRows = rowLines
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const parts = line.split(',')
+      return Object.fromEntries(varNames.map((n, i) => [n, parts[i] ?? '']))
+    })
+  const firstRow = printRows[0] ?? {}
+  const values = Object.fromEntries(varNames.map((n) => [n, firstRow[n] ?? '']))
+  return { variables, values, printRows }
+}
 
-  const [form, setForm] = useState<Variable>({ name: '', type: 'text', default: '' })
+export function VariableList({
+  variables,
+  values,
+  onChange,
+  onValuesChange,
+  onTextChange,
+  printRows,
+  onPrintRowsChange,
+  onActivePrintRowChange,
+  initialText,
+  syncKey,
+}: VariableListProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null)
+  const suppressRef = useRef(false)
+  const dataRef = useRef({ variables, values, printRows })
 
-  const openAdd = () => {
-    setForm({ name: '', type: 'text', default: '' })
-    setEditTarget(null)
-    setShowAdd(true)
-  }
+  // Mount Monaco once
+  useEffect(() => {
+    if (!containerRef.current) return
+    let disposed = false
 
-  const openEdit = (v: Variable) => {
-    setForm({ ...v })
-    setEditTarget(v)
-    setShowAdd(true)
-  }
+    import('monaco-editor').then((monaco) => {
+      if (disposed || !containerRef.current) return
 
-  const handleSave = () => {
-    if (!form.name.trim()) return
-    if (editTarget) {
-      onChange(variables.map((v) => (v.name === editTarget.name ? form : v)))
-      // update value key if name changed
-      if (editTarget.name !== form.name) {
-        const next = { ...values }
-        next[form.name] = next[editTarget.name] ?? form.default
-        delete next[editTarget.name]
-        onValuesChange(next)
-      }
-    } else {
-      onChange([...variables, form])
-      onValuesChange({ ...values, [form.name]: form.default })
+      const initial = initialText || serialize(variables, printRows)
+
+      const editor = monaco.editor.create(containerRef.current!, {
+        value: initial,
+        language: 'plaintext',
+        theme: 'vs-dark',
+        minimap: { enabled: false },
+        lineNumbers: 'off',
+        glyphMargin: false,
+        folding: false,
+        lineDecorationsWidth: 0,
+        lineNumbersMinChars: 0,
+        renderLineHighlight: 'none',
+        scrollBeyondLastLine: false,
+        wordWrap: 'off',
+        fontSize: 12,
+        fontFamily: 'var(--vscode-editor-font-family, "Cascadia Code", Menlo, monospace)',
+        automaticLayout: true,
+        scrollbar: { vertical: 'hidden', horizontal: 'auto', alwaysConsumeMouseWheel: false },
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        padding: { top: 4, bottom: 4 },
+      })
+
+      editorRef.current = editor
+
+      const parsed = parseCSV(initial)
+      onChange(parsed.variables)
+      onValuesChange(parsed.values)
+      onPrintRowsChange(parsed.printRows)
+
+      editor.onDidChangeModelContent(() => {
+        if (suppressRef.current) return
+        const text = editor.getValue()
+        onTextChange(text)
+        const parsed = parseCSV(text)
+        onChange(parsed.variables)
+        onValuesChange(parsed.values)
+        onPrintRowsChange(parsed.printRows)
+      })
+
+      editor.onDidChangeCursorPosition((e) => {
+        // line 1 = header, lines 2+ = data rows (0-indexed)
+        const line = e.position.lineNumber
+        onActivePrintRowChange(Math.max(0, line - 2))
+      })
+    })
+
+    return () => {
+      disposed = true
+      editorRef.current?.dispose()
+      editorRef.current = null
     }
-    setShowAdd(false)
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const handleDelete = (name: string) => {
-    onChange(variables.filter((v) => v.name !== name))
-    const next = { ...values }
-    delete next[name]
-    onValuesChange(next)
-  }
+  // Keep latest data in a ref so syncKey effect can read it without stale closure
+  useEffect(() => {
+    dataRef.current = { variables, values, printRows }
+  }, [variables, values, printRows])
+
+  // Only reset editor on template switch (syncKey change), not on every user edit
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const { variables, printRows } = dataRef.current
+    suppressRef.current = true
+    editor.setValue(serialize(variables, printRows))
+    suppressRef.current = false
+  }, [syncKey])
 
   return (
-    <div className="border-t border-white/10 bg-[#2a2a2a] shrink-0">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2">
-        <button
-          className="flex items-center gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wider hover:text-white transition-colors"
-          onClick={() => setCollapsed((c) => !c)}
-        >
-          <span>{collapsed ? '▶' : '▼'}</span>
-          Variables
-          <span className="normal-case font-normal text-gray-600">({variables.length})</span>
-        </button>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={openAdd}>+ Add</Button>
-          <button
-            onClick={() => setShowBatch((b) => !b)}
-            className={`text-xs px-2 py-1 rounded transition-colors border ${
-              showBatch
-                ? 'bg-blue-600/30 border-blue-500/50 text-blue-300'
-                : 'bg-transparent border-white/10 text-gray-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            Batch
-          </button>
-        </div>
-      </div>
-
-      {!collapsed && (
-        <div className="px-4 pb-3 flex flex-col gap-3">
-          {/* Variable definitions */}
-          {variables.length === 0 ? (
-            <p className="text-xs text-gray-600">No variables defined. Add one to use &#123;&#123;varName&#125;&#125; in text.</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {variables.map((v) => (
-                <div
-                  key={v.name}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded bg-[#1a1a1a] border border-white/5"
-                >
-                  <span className="text-xs font-mono text-white">{`{{${v.name}}}`}</span>
-                  <span className={`text-xs px-1 rounded ${TYPE_COLORS[v.type]}`}>{v.type}</span>
-                  <input
-                    type={v.type === 'number' ? 'number' : 'text'}
-                    className="flex-1 min-w-0 bg-transparent border-b border-white/10 focus:border-accent text-xs text-gray-400 focus:text-white px-1 py-0.5 focus:outline-none transition-colors"
-                    value={values[v.name] ?? v.default}
-                    onChange={(e) => {
-                      const next = { ...values, [v.name]: e.target.value }
-                      onValuesChange(next)
-                      onChange(variables.map((vv) => vv.name === v.name ? { ...vv, default: e.target.value } : vv))
-                    }}
-                    placeholder={v.name}
-                  />
-                  <div className="ml-auto flex gap-1">
-                    <button
-                      className="text-xs text-gray-500 hover:text-white transition-colors px-1"
-                      onClick={() => openEdit(v)}
-                    >
-                      ✎
-                    </button>
-                    <button
-                      className="text-xs text-gray-500 hover:text-red-400 transition-colors px-1"
-                      onClick={() => handleDelete(v.name)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Batch print table */}
-          {showBatch && (
-            <div className="flex flex-col gap-2">
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Batch rows</p>
-              <PrintBatchTable
-                variables={variables}
-                rows={printRows}
-                activeRow={activePrintRow}
-                onRowsChange={onPrintRowsChange}
-                onActiveRowChange={onActivePrintRowChange}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {showAdd && (
-        <Modal
-          title={editTarget ? 'Edit Variable' : 'Add Variable'}
-          onClose={() => setShowAdd(false)}
-        >
-          <div className="flex flex-col gap-4">
-            <Input
-              id="var-name"
-              label="Name (no spaces)"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value.replace(/\s/g, '_') }))}
-              placeholder="myVariable"
-              autoFocus
-            />
-
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-gray-300">Type</label>
-              <div className="flex gap-2">
-                {(['text', 'number', 'url'] as const).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => setForm((f) => ({ ...f, type: t }))}
-                    className={`flex-1 py-1.5 rounded text-sm border transition-colors ${
-                      form.type === t
-                        ? 'border-accent bg-accent/20 text-white'
-                        : 'border-white/20 text-gray-400 hover:border-white/40'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <Input
-              id="var-default"
-              label="Default value"
-              value={form.default}
-              onChange={(e) => setForm((f) => ({ ...f, default: e.target.value }))}
-              placeholder="default..."
-            />
-
-            <div className="flex gap-2 justify-end">
-              <Button variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Button>
-              <Button onClick={handleSave} disabled={!form.name.trim()}>
-                {editTarget ? 'Save' : 'Add'}
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
+    <div className="shrink-0" style={{ height: 110 }}>
+      <div ref={containerRef} style={{ height: '100%' }} />
     </div>
   )
 }

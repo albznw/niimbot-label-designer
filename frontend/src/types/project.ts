@@ -15,6 +15,8 @@ export interface Template {
   variables: Variable[]
   label_size: LabelSize
   sub_label: 'top' | 'bottom'
+  print_rows: Record<string, string>[]
+  variable_text: string | null
   created_at: string
   updated_at: string
 }
