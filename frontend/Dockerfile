@@ -7,5 +7,13 @@ RUN npm run build
 
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
-RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+COPY <<EOF /etc/nginx/conf.d/default.conf
+server {
+    listen 80;
+    location / {
+        root /usr/share/nginx/html;
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
 EXPOSE 80
