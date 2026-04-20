@@ -16,4 +16,5 @@ server {
     }
 }
 EOF
+
 EXPOSE 80
