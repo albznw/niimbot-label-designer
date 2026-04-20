@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas'
 import { canvasTo1BitBitmap } from './label-renderer'
-import { applyVariables } from './fabric-utils'
+import { applyVariables } from './canvas-utils'
 
 export async function htmlTo1BitBitmap(
   html: string,

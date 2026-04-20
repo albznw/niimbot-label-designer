@@ -9,16 +9,21 @@ import type { PrinterStatus, PrintOptions } from './lib/printer-client'
 import { bitmapToPngBase64 } from './lib/bitmap-utils'
 import { TemplateList } from './components/projects/TemplateList'
 import { LabelCanvas } from './components/designer/LabelCanvas'
-import type { LabelCanvasHandle } from './components/designer/LabelCanvas'
-import { ElementToolbar } from './components/designer/ElementToolbar'
+import type { LabelCanvasHandle, NodeConfig } from './components/designer/LabelCanvas'
+import { ToolSidebar } from './components/designer/ToolSidebar'
+import type { Tool } from './components/designer/ToolSidebar'
+import { AlignPanel } from './components/designer/AlignPanel'
+import { DocAlignPanel } from './components/designer/DocAlignPanel'
+import type { AlignDocDirection } from './components/designer/DocAlignPanel'
 import { PropertiesPanel } from './components/designer/PropertiesPanel'
+import { LayerPanel } from './components/designer/LayerPanel'
+import { LabelSettings } from './components/designer/LabelSettings'
 import { VariableList } from './components/designer/VariableList'
 import { BitmapPreview } from './components/designer/BitmapPreview'
 import { HtmlEditor } from './components/designer/HtmlEditor'
 import { PrinterPanel } from './components/printer/PrinterPanel'
 import { PrintDialog } from './components/printer/PrintDialog'
 import { PrintHistory } from './components/history/PrintHistory'
-import type { Canvas } from 'fabric'
 
 export function App() {
   const [templates, setTemplates] = useState<Template[]>([])
@@ -30,10 +35,16 @@ export function App() {
   const [variableValues, setVariableValues] = useState<Record<string, string>>({})
   const [bitmap, setBitmap] = useState<Uint8Array | null>(null)
   const [bitmapDims, setBitmapDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
-  const [selectedObject, setSelectedObject] = useState<unknown>(null)
-  const [fabricCanvas, setFabricCanvas] = useState<Canvas | null>(null)
+  const [selectedObject, setSelectedObject] = useState<NodeConfig | NodeConfig[] | null>(null)
+  const [activeTool, setActiveTool] = useState<Tool>('select')
   const [editorMode, setEditorMode] = useState<'canvas' | 'html'>('canvas')
   const [modeSwitchNotice, setModeSwitchNotice] = useState<string | null>(null)
+  const [canvasNodes, setCanvasNodes] = useState<NodeConfig[]>([])
+  const [canvasSelectedIds, setCanvasSelectedIds] = useState<string[]>([])
+  const [labelSettings, setLabelSettings] = useState<{ labelType: number; density: number }>({
+    labelType: 1,
+    density: 3,
+  })
 
   // Printer state
   const [printerStatus, setPrinterStatus] = useState<PrinterStatus>({
@@ -68,8 +79,11 @@ export function App() {
   useEffect(() => {
     setBitmap(null)
     setSelectedObject(null)
-    setFabricCanvas(null)
+    setActiveTool('select')
     setModeSwitchNotice(null)
+    setCanvasNodes([])
+    setCanvasSelectedIds([])
+    setLabelSettings({ labelType: 1, density: 3 })
     if (selectedTemplate) {
       const defaults: Record<string, string> = {}
       selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
@@ -110,6 +124,18 @@ export function App() {
         t.id === selectedTemplateId ? { ...t, canvas_json: json } : t
       )
     )
+    const nodes = canvasRef.current?.getNodes() ?? []
+    setCanvasNodes(nodes)
+    const ids = canvasRef.current?.getSelectedIds() ?? []
+    setCanvasSelectedIds(ids)
+    const settings = canvasRef.current?.getLabelSettings()
+    if (settings) {
+      setLabelSettings((prev) =>
+        prev.labelType === settings.labelType && prev.density === settings.density
+          ? prev
+          : settings
+      )
+    }
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
       api.updateTemplate(selectedTemplateId, { canvas_json: json })
@@ -136,9 +162,15 @@ export function App() {
     setBitmapDims({ w, h })
   }, [])
 
-  const handleSelectionChange = useCallback((obj: unknown) => {
-    setSelectedObject(obj)
-    setFabricCanvas(canvasRef.current?.getCanvas() ?? null)
+  const handleSelectionChange = useCallback((objs: NodeConfig[]) => {
+    if (!objs || objs.length === 0) {
+      setSelectedObject(null)
+    } else if (objs.length === 1) {
+      setSelectedObject(objs[0])
+    } else {
+      setSelectedObject(objs)
+    }
+    setCanvasSelectedIds(objs.map((o) => o.id))
   }, [])
 
   const handleVariablesChange = useCallback((vars: Variable[]) => {
@@ -239,6 +271,9 @@ export function App() {
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [bitmap, bitmapDims, selectedTemplate, printerStatus, dims])
 
+  const hasSelection = selectedObject != null
+  const multiSelected = Array.isArray(selectedObject) && selectedObject.length >= 2
+
   return (
     <div className="flex flex-col h-screen bg-[#1a1a1a] text-white overflow-hidden">
       {/* Top bar */}
@@ -337,22 +372,24 @@ export function App() {
                 </div>
 
                 {editorMode === 'canvas' ? (
-                  <>
-                    <ElementToolbar
-                      canvasRef={canvasRef}
-                      hasSelection={selectedObject != null}
+                  <div className="flex flex-1 overflow-hidden">
+                    <ToolSidebar
+                      activeTool={activeTool}
+                      onToolChange={setActiveTool}
+                      hasSelection={hasSelection}
+                      onDelete={() => canvasRef.current?.deleteSelected()}
                     />
-                    <div className="flex flex-1 overflow-hidden">
-                      <LabelCanvas
-                        ref={canvasRef}
-                        template={selectedTemplate}
-                        variableValues={variableValues}
-                        onCanvasChange={handleCanvasChange}
-                        onBitmapUpdate={handleBitmapUpdate}
-                        onSelectionChange={handleSelectionChange}
-                      />
-                    </div>
-                  </>
+                    <LabelCanvas
+                      ref={canvasRef}
+                      template={selectedTemplate}
+                      variableValues={variableValues}
+                      activeTool={activeTool}
+                      onCanvasChange={handleCanvasChange}
+                      onBitmapUpdate={handleBitmapUpdate}
+                      onSelectionChange={handleSelectionChange}
+                      onToolUsed={() => setActiveTool('select')}
+                    />
+                  </div>
                 ) : (
                   <HtmlEditor
                     html={selectedTemplate.html ?? defaultHtmlForSize(selectedTemplate.label_size)}
@@ -372,23 +409,51 @@ export function App() {
                 />
               </div>
 
-              {/* Right sidebar - properties + bitmap preview */}
+              {/* Right sidebar - bitmap preview + properties */}
               <div className="w-[280px] shrink-0 border-l border-white/10 flex flex-col overflow-hidden bg-[#2a2a2a]">
-                {editorMode === 'canvas' && (
-                  <div className="flex-1 overflow-hidden">
-                    <PropertiesPanel
-                      selectedObject={selectedObject}
-                      canvas={fabricCanvas}
-                    />
-                  </div>
-                )}
-                {editorMode === 'html' && <div className="flex-1" />}
                 <BitmapPreview
                   bitmap={bitmap}
                   width={dims.w}
                   height={dims.h}
                   labelSize={selectedTemplate.label_size}
                 />
+                {editorMode === 'canvas' && (
+                  <>
+                    <LabelSettings
+                      labelType={labelSettings.labelType}
+                      density={labelSettings.density}
+                      onChange={(s) => {
+                        setLabelSettings((prev) => ({ ...prev, ...s }))
+                        canvasRef.current?.setLabelSettings(s)
+                      }}
+                    />
+                    <div className="flex-1 overflow-y-auto">
+                      {multiSelected && (
+                        <AlignPanel
+                          onAlign={(dir) => canvasRef.current?.alignSelected(dir)}
+                        />
+                      )}
+                      <PropertiesPanel
+                        selectedObject={selectedObject}
+                        onUpdate={(patch) => canvasRef.current?.updateSelected(patch)}
+                      />
+                      {hasSelection && (
+                        <DocAlignPanel onAlign={(dir: AlignDocDirection) => canvasRef.current?.alignToDocument(dir)} />
+                      )}
+                      <LayerPanel
+                        nodes={canvasNodes}
+                        selectedIds={canvasSelectedIds}
+                        onSelect={(id) => canvasRef.current?.selectNode(id)}
+                        onReorder={() => { /* not used */ }}
+                        onMoveToFront={(id) => canvasRef.current?.moveToFront(id)}
+                        onMoveToBack={(id) => canvasRef.current?.moveToBack(id)}
+                        onMoveForward={(id) => canvasRef.current?.moveForward(id)}
+                        onMoveBackward={(id) => canvasRef.current?.moveBackward(id)}
+                      />
+                    </div>
+                  </>
+                )}
+                {editorMode === 'html' && <div className="flex-1" />}
               </div>
             </div>
           )}
@@ -403,6 +468,7 @@ export function App() {
           bitmapWidth={bitmapDims.w || dims.w}
           bitmapHeight={bitmapDims.h || dims.h}
           printerStatus={printerStatus}
+          labelSettings={labelSettings}
           onPrint={handlePrint}
           onClose={() => setShowPrintDialog(false)}
         />

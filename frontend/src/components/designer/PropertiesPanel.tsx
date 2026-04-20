@@ -1,22 +1,15 @@
 import { useEffect, useState, useCallback } from 'react'
-import { IText, Rect, FabricObject } from 'fabric'
-import type { Canvas } from 'fabric'
+import type { NodeConfig } from './LabelCanvas'
+
+declare global {
+  interface Window {
+    queryLocalFonts?: () => Promise<{ family: string; fullName: string }[]>
+  }
+}
 
 interface PropertiesPanelProps {
-  selectedObject: unknown
-  canvas: Canvas | null
-}
-
-function isIText(obj: unknown): obj is IText {
-  return obj instanceof IText
-}
-
-function isRect(obj: unknown): obj is Rect {
-  return obj instanceof Rect
-}
-
-function isFabricObject(obj: unknown): obj is FabricObject {
-  return obj instanceof FabricObject
+  selectedObject: NodeConfig | NodeConfig[] | null
+  onUpdate: (patch: Partial<NodeConfig>) => void
 }
 
 interface ObjState {
@@ -24,99 +17,245 @@ interface ObjState {
   y: number
   width: number
   height: number
-  angle: number
+  rotation: number
   // text
   text: string
   fontSize: number
-  fontWeight: string
-  fontStyle: string
+  fontWeight: string // 'normal' | 'bold'
+  fontStyle: string // 'normal' | 'italic'
+  fontFamily: string
   textAlign: string
-  // rect
+  // rect / circle / line
   fill: string
   stroke: string
   strokeWidth: number
+  // circle
+  radiusX: number
+  radiusY: number
 }
 
-function readState(obj: unknown): ObjState {
-  const defaults: ObjState = {
-    x: 0, y: 0, width: 0, height: 0, angle: 0,
-    text: '', fontSize: 20, fontWeight: 'normal', fontStyle: 'normal', textAlign: 'left',
-    fill: '#ffffff', stroke: '#000000', strokeWidth: 1,
-  }
-  if (!isFabricObject(obj)) return defaults
-  const fo = obj as FabricObject
+function parseFontStyle(style: string): { bold: boolean; italic: boolean } {
+  const tokens = (style ?? '').toLowerCase().split(/\s+/)
   return {
-    x: Math.round(fo.left ?? 0),
-    y: Math.round(fo.top ?? 0),
-    width: Math.round((fo.width ?? 0) * (fo.scaleX ?? 1)),
-    height: Math.round((fo.height ?? 0) * (fo.scaleY ?? 1)),
-    angle: Math.round(fo.angle ?? 0),
-    text: isIText(obj) ? (obj.text ?? '') : '',
-    fontSize: isIText(obj) ? (obj.fontSize ?? 20) : 20,
-    fontWeight: isIText(obj) ? String(obj.fontWeight ?? 'normal') : 'normal',
-    fontStyle: isIText(obj) ? String(obj.fontStyle ?? 'normal') : 'normal',
-    textAlign: isIText(obj) ? (obj.textAlign ?? 'left') : 'left',
-    fill: isRect(obj) ? String(fo.fill ?? '#ffffff') : '#ffffff',
-    stroke: isRect(obj) ? String(fo.stroke ?? '#000000') : '#000000',
-    strokeWidth: isRect(obj) ? (fo.strokeWidth ?? 1) : 1,
+    bold: tokens.includes('bold'),
+    italic: tokens.includes('italic'),
   }
 }
 
-export function PropertiesPanel({ selectedObject, canvas }: PropertiesPanelProps) {
-  const [state, setState] = useState<ObjState>(readState(selectedObject))
+function composeFontStyle(bold: boolean, italic: boolean): string {
+  const parts: string[] = []
+  if (bold) parts.push('bold')
+  if (italic) parts.push('italic')
+  return parts.length === 0 ? 'normal' : parts.join(' ')
+}
+
+function readState(node: NodeConfig | null): ObjState {
+  const defaults: ObjState = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    rotation: 0,
+    text: '',
+    fontSize: 20,
+    fontWeight: 'normal',
+    fontStyle: 'normal',
+    fontFamily: 'Arial',
+    textAlign: 'left',
+    fill: '#ffffff',
+    stroke: '#000000',
+    strokeWidth: 1,
+    radiusX: 0,
+    radiusY: 0,
+  }
+  if (!node) return defaults
+
+  const base: ObjState = {
+    ...defaults,
+    x: Math.round(node.x ?? 0),
+    y: Math.round(node.y ?? 0),
+    rotation: Math.round(node.rotation ?? 0),
+  }
+
+  if (node.type === 'text') {
+    const { bold, italic } = parseFontStyle(node.fontStyle)
+    return {
+      ...base,
+      width: Math.round(node.width ?? 0),
+      height: 0,
+      text: node.text ?? '',
+      fontSize: node.fontSize ?? 20,
+      fontWeight: bold ? 'bold' : 'normal',
+      fontStyle: italic ? 'italic' : 'normal',
+      fontFamily: node.fontFamily ?? 'Arial',
+      textAlign: node.align ?? 'left',
+      fill: node.fill ?? '#000000',
+    }
+  }
+
+  if (node.type === 'rect') {
+    return {
+      ...base,
+      width: Math.round(node.width ?? 0),
+      height: Math.round(node.height ?? 0),
+      fill: String(node.fill ?? '#ffffff'),
+      stroke: String(node.stroke ?? '#000000'),
+      strokeWidth: node.strokeWidth ?? 1,
+    }
+  }
+
+  if (node.type === 'circle') {
+    return {
+      ...base,
+      radiusX: Math.round(node.radiusX ?? 0),
+      radiusY: Math.round(node.radiusY ?? 0),
+      fill: String(node.fill ?? '#ffffff'),
+      stroke: String(node.stroke ?? '#000000'),
+      strokeWidth: node.strokeWidth ?? 1,
+    }
+  }
+
+  if (node.type === 'line') {
+    return {
+      ...base,
+      stroke: String(node.stroke ?? '#000000'),
+      strokeWidth: node.strokeWidth ?? 1,
+    }
+  }
+
+  // image
+  return {
+    ...base,
+    width: Math.round(node.width ?? 0),
+    height: Math.round(node.height ?? 0),
+  }
+}
+
+export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelProps) {
+  const isArray = Array.isArray(selectedObject)
+  const single = !isArray ? (selectedObject as NodeConfig | null) : null
+
+  const [state, setState] = useState<ObjState>(readState(single))
+  const [localFonts, setLocalFonts] = useState<string[] | null>(null)
+  const [fontApiAvailable, setFontApiAvailable] = useState<boolean>(
+    typeof window !== 'undefined' && typeof window.queryLocalFonts === 'function'
+  )
+  const [fontsAttempted, setFontsAttempted] = useState(false)
 
   useEffect(() => {
-    setState(readState(selectedObject))
-  }, [selectedObject])
+    setState(readState(single))
+  }, [single])
 
-  const apply = useCallback((patch: Partial<ObjState>) => {
-    if (!isFabricObject(selectedObject) || !canvas) return
-    const fo = selectedObject as FabricObject
-    const next = { ...state, ...patch }
-    setState(next)
-
-    const updates: Record<string, unknown> = {
-      left: next.x,
-      top: next.y,
-      angle: next.angle,
+  useEffect(() => {
+    if (fontsAttempted) return
+    if (!single || single.type !== 'text') return
+    if (typeof window === 'undefined' || typeof window.queryLocalFonts !== 'function') {
+      setFontApiAvailable(false)
+      setFontsAttempted(true)
+      return
     }
+    setFontsAttempted(true)
+    window
+      .queryLocalFonts()
+      .then((fonts) => {
+        const families = Array.from(new Set(fonts.map((f) => f.family))).sort((a, b) =>
+          a.localeCompare(b)
+        )
+        setLocalFonts(families)
+        setFontApiAvailable(true)
+      })
+      .catch(() => {
+        setFontApiAvailable(false)
+      })
+  }, [single, fontsAttempted])
 
-    // Width/height via scale
-    if ((fo.width ?? 0) > 0) updates.scaleX = next.width / (fo.width ?? 1)
-    if ((fo.height ?? 0) > 0) updates.scaleY = next.height / (fo.height ?? 1)
+  const apply = useCallback(
+    (patch: Partial<ObjState>) => {
+      if (!single) return
+      const next = { ...state, ...patch }
+      setState(next)
 
-    if (isIText(selectedObject)) {
-      updates.text = next.text
-      updates.fontSize = next.fontSize
-      updates.fontWeight = next.fontWeight
-      updates.fontStyle = next.fontStyle
-      updates.textAlign = next.textAlign
-    }
+      const nodePatch: Record<string, unknown> = {
+        x: next.x,
+        y: next.y,
+        rotation: next.rotation,
+      }
 
-    if (isRect(selectedObject)) {
-      updates.fill = next.fill
-      updates.stroke = next.stroke
-      updates.strokeWidth = next.strokeWidth
-    }
+      if (single.type === 'text') {
+        nodePatch.width = next.width
+        nodePatch.text = next.text
+        nodePatch.fontSize = next.fontSize
+        nodePatch.fontStyle = composeFontStyle(
+          next.fontWeight === 'bold',
+          next.fontStyle === 'italic'
+        )
+        nodePatch.fontFamily = next.fontFamily
+        nodePatch.align = next.textAlign
+        nodePatch.fill = next.fill
+      }
 
-    fo.set(updates)
-    canvas.renderAll()
-    canvas.fire('object:modified', { target: fo })
-  }, [selectedObject, canvas, state])
+      if (single.type === 'rect') {
+        nodePatch.width = next.width
+        nodePatch.height = next.height
+        nodePatch.fill = next.fill
+        nodePatch.stroke = next.stroke
+        nodePatch.strokeWidth = next.strokeWidth
+      }
 
-  if (!isFabricObject(selectedObject)) {
+      if (single.type === 'circle') {
+        nodePatch.radiusX = next.radiusX
+        nodePatch.radiusY = next.radiusY
+        nodePatch.fill = next.fill
+        nodePatch.stroke = next.stroke
+        nodePatch.strokeWidth = next.strokeWidth
+      }
+
+      if (single.type === 'line') {
+        nodePatch.stroke = next.stroke
+        nodePatch.strokeWidth = next.strokeWidth
+      }
+
+      if (single.type === 'image') {
+        nodePatch.width = next.width
+        nodePatch.height = next.height
+      }
+
+      onUpdate(nodePatch as Partial<NodeConfig>)
+    },
+    [single, onUpdate, state]
+  )
+
+  // Nothing selected
+  if (!selectedObject || (Array.isArray(selectedObject) && selectedObject.length === 0)) {
     return (
-      <div className="flex items-center justify-center h-full px-4">
+      <div className="flex items-center justify-center py-6 px-4">
         <p className="text-xs text-gray-500 text-center">Select an element to edit its properties</p>
       </div>
     )
   }
 
-  const isText = isIText(selectedObject)
-  const isRectObj = isRect(selectedObject)
+  // Multi-selection: show minimal info only
+  if (Array.isArray(selectedObject)) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+          Properties ({selectedObject.length})
+        </p>
+        <p className="text-xs text-gray-500">
+          {selectedObject.length} elements selected. Use the align panel above to align them.
+        </p>
+      </div>
+    )
+  }
+
+  const node = single as NodeConfig
+  const isText = node.type === 'text'
+  const isRectObj = node.type === 'rect'
+  const isCircle = node.type === 'circle'
+  const isLine = node.type === 'line'
 
   return (
-    <div className="flex flex-col gap-4 p-4 overflow-y-auto h-full">
+    <div className="flex flex-col gap-4 p-4">
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Properties</p>
 
       {isText && (
@@ -143,6 +282,44 @@ export function PropertiesPanel({ selectedObject, canvas }: PropertiesPanelProps
               max={200}
               onChange={(e) => apply({ fontSize: Number(e.target.value) })}
             />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Font family</span>
+            {fontApiAvailable && localFonts ? (
+              <select
+                className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
+                value={state.fontFamily}
+                onChange={(e) => apply({ fontFamily: e.target.value })}
+                style={{ fontFamily: state.fontFamily }}
+              >
+                {localFonts.includes(state.fontFamily) ? null : (
+                  <option value={state.fontFamily} style={{ fontFamily: state.fontFamily }}>
+                    {state.fontFamily}
+                  </option>
+                )}
+                {localFonts.map((f) => (
+                  <option key={f} value={f} style={{ fontFamily: f }}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
+                value={state.fontFamily}
+                onChange={(e) => apply({ fontFamily: e.target.value })}
+                placeholder="e.g. Arial"
+                style={{ fontFamily: state.fontFamily }}
+              />
+            )}
+            <span
+              className="text-[11px] text-gray-500 mt-0.5"
+              style={{ fontFamily: state.fontFamily }}
+            >
+              Preview: {state.fontFamily}
+            </span>
           </label>
 
           <div className="flex gap-2">
@@ -177,7 +354,7 @@ export function PropertiesPanel({ selectedObject, canvas }: PropertiesPanelProps
       <section className="flex flex-col gap-3">
         <p className="text-xs text-gray-500 uppercase tracking-wider">Transform</p>
         <div className="grid grid-cols-2 gap-2">
-          {([['x', 'X'], ['y', 'Y'], ['width', 'W'], ['height', 'H']] as const).map(([key, label]) => (
+          {([['x', 'X'], ['y', 'Y']] as const).map(([key, label]) => (
             <label key={key} className="flex flex-col gap-1">
               <span className="text-xs text-gray-400">{label}</span>
               <input
@@ -188,21 +365,65 @@ export function PropertiesPanel({ selectedObject, canvas }: PropertiesPanelProps
               />
             </label>
           ))}
+          {!isCircle && !isLine && (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-400">W</span>
+                <input
+                  type="number"
+                  className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                  value={state.width}
+                  onChange={(e) => apply({ width: Number(e.target.value) })}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-400">H</span>
+                <input
+                  type="number"
+                  className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                  value={state.height}
+                  onChange={(e) => apply({ height: Number(e.target.value) })}
+                />
+              </label>
+            </>
+          )}
+          {isCircle && (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-400">RX</span>
+                <input
+                  type="number"
+                  className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                  value={state.radiusX}
+                  onChange={(e) => apply({ radiusX: Number(e.target.value) })}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-400">RY</span>
+                <input
+                  type="number"
+                  className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                  value={state.radiusY}
+                  onChange={(e) => apply({ radiusY: Number(e.target.value) })}
+                />
+              </label>
+            </>
+          )}
           <label className="flex flex-col gap-1 col-span-2">
             <span className="text-xs text-gray-400">Rotation</span>
             <input
               type="number"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
-              value={state.angle}
+              value={state.rotation}
               min={-180}
               max={180}
-              onChange={(e) => apply({ angle: Number(e.target.value) })}
+              onChange={(e) => apply({ rotation: Number(e.target.value) })}
             />
           </label>
         </div>
       </section>
 
-      {isRectObj && (
+      {(isRectObj || isCircle) && (
         <section className="flex flex-col gap-3">
           <p className="text-xs text-gray-500 uppercase tracking-wider">Style</p>
           <label className="flex flex-col gap-1">
@@ -214,6 +435,32 @@ export function PropertiesPanel({ selectedObject, canvas }: PropertiesPanelProps
               onChange={(e) => apply({ fill: e.target.value })}
             />
           </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Stroke</span>
+            <input
+              type="color"
+              className="w-full h-8 rounded border border-white/20 bg-[#1a1a1a] cursor-pointer"
+              value={state.stroke}
+              onChange={(e) => apply({ stroke: e.target.value })}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Stroke width</span>
+            <input
+              type="number"
+              className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+              value={state.strokeWidth}
+              min={0}
+              max={20}
+              onChange={(e) => apply({ strokeWidth: Number(e.target.value) })}
+            />
+          </label>
+        </section>
+      )}
+
+      {isLine && (
+        <section className="flex flex-col gap-3">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Style</p>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">Stroke</span>
             <input

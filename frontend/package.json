@@ -11,14 +11,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mdi/js": "^7.4.47",
+    "@mdi/react": "^1.6.1",
     "@mmote/niimbluelib": "^0.0.1-alpha.39",
-    "fabric": "^6.9.1",
     "html2canvas": "^1.4.1",
     "jsbarcode": "^3.12.3",
+    "konva": "^9.3.22",
     "monaco-editor": "^0.55.1",
     "qrcode": "^1.5.4",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "react-konva": "^18.2.14"
   },
   "devDependencies": {
     "@types/html2canvas": "^0.5.35",

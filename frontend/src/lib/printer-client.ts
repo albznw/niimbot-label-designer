@@ -12,6 +12,7 @@ export type PrinterStatus = {
 export type PrintOptions = {
   density: number
   quantity: number
+  labelType?: number
 }
 
 function rotateCanvas90CCW(src: HTMLCanvasElement): HTMLCanvasElement {
@@ -111,10 +112,18 @@ class PrinterClient {
 
     const encoded = ImageEncoder.encodeCanvas(canvas)
 
-    const printTask = client.abstraction.newPrintTask('B1', {
+    const printTaskOptions: {
+      totalPages: number
+      density: number
+      labelType?: number
+    } = {
       totalPages: options.quantity,
       density: options.density,
-    })
+    }
+    if (typeof options.labelType === 'number') {
+      printTaskOptions.labelType = options.labelType
+    }
+    const printTask = client.abstraction.newPrintTask('B1', printTaskOptions)
 
     await printTask.printInit()
     await printTask.printPage(encoded, options.quantity)

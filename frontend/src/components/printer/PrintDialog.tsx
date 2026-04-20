@@ -9,6 +9,7 @@ interface PrintDialogProps {
   bitmapWidth: number
   bitmapHeight: number
   printerStatus: PrinterStatus
+  labelSettings: { labelType: number; density: number }
   onPrint: (variableValues: Record<string, string>, options: PrintOptions) => Promise<void>
   onClose: () => void
 }
@@ -19,13 +20,14 @@ export function PrintDialog({
   bitmapWidth,
   bitmapHeight,
   printerStatus,
+  labelSettings,
   onPrint,
   onClose,
 }: PrintDialogProps) {
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
     () => Object.fromEntries(template.variables.map((v) => [v.name, v.default]))
   )
-  const [density, setDensity] = useState(3)
+  const [density, setDensity] = useState(labelSettings.density)
   const [quantity, setQuantity] = useState(1)
   const [printing, setPrinting] = useState(false)
   const [printError, setPrintError] = useState<string | null>(null)
@@ -36,7 +38,11 @@ export function PrintDialog({
     setPrintError(null)
     setPrinting(true)
     try {
-      await onPrint(variableValues, { density, quantity })
+      await onPrint(variableValues, {
+        density,
+        quantity,
+        labelType: labelSettings.labelType,
+      })
     } catch (e) {
       setPrintError(e instanceof Error ? e.message : 'Print failed')
     } finally {

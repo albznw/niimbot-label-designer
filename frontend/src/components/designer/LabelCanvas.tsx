@@ -4,225 +4,1430 @@ import {
   useImperativeHandle,
   useRef,
   useCallback,
+  useState,
+  type ChangeEvent,
 } from 'react'
 import {
-  Canvas,
-  IText,
+  Stage,
+  Layer,
+  Text,
   Rect,
-  FabricImage,
-} from 'fabric'
+  Ellipse,
+  Line,
+  Image as KonvaImage,
+  Transformer,
+} from 'react-konva'
+import Konva from 'konva'
 import type { Template } from '../../types/project'
 import { LABEL_DIMS } from '../../types/label'
-import { applyVariables, generateQRDataURL, generateBarcodeDataURLAsync, fabricToCanvas } from '../../lib/fabric-utils'
+import {
+  applyVariables,
+  generateQRDataURL,
+  generateBarcodeDataURLAsync,
+  konvaStageToCanvas,
+} from '../../lib/canvas-utils'
 import { canvasTo1BitBitmap } from '../../lib/label-renderer'
+import type { Tool } from './ToolSidebar'
+import type { AlignDirection } from './AlignPanel'
+import type { AlignDocDirection } from './DocAlignPanel'
+
+export type NodeConfig =
+  | {
+      id: string
+      type: 'text'
+      x: number
+      y: number
+      width: number
+      rotation: number
+      text: string
+      fontSize: number
+      fontStyle: string // 'normal' | 'bold' | 'italic' | 'bold italic'
+      fontFamily: string
+      align: string
+      fill: string
+    }
+  | {
+      id: string
+      type: 'rect'
+      x: number
+      y: number
+      width: number
+      height: number
+      rotation: number
+      fill: string
+      stroke: string
+      strokeWidth: number
+    }
+  | {
+      id: string
+      type: 'circle'
+      x: number
+      y: number
+      radiusX: number
+      radiusY: number
+      fill: string
+      stroke: string
+      strokeWidth: number
+      draggable: true
+      rotation: number
+    }
+  | {
+      id: string
+      type: 'line'
+      x: number
+      y: number
+      points: number[]
+      stroke: string
+      strokeWidth: number
+      draggable: true
+      rotation: number
+    }
+  | {
+      id: string
+      type: 'image'
+      x: number
+      y: number
+      width: number
+      height: number
+      rotation: number
+      src: string
+    }
+
+export interface LabelSettings {
+  labelType: number
+  density: number
+}
 
 export interface LabelCanvasHandle {
   addText: () => void
   addRect: () => void
+  addCircle: () => void
+  addLine: () => void
   addQR: (content: string) => Promise<void>
   addBarcode: (content: string) => Promise<void>
   deleteSelected: () => void
-  getSelectedObject: () => unknown
-  getCanvas: () => Canvas | null
+  copySelected: () => void
+  pasteSelected: () => void
+  alignSelected: (direction: AlignDirection) => void
+  alignToDocument: (direction: AlignDocDirection) => void
+  getSelectedObject: () => NodeConfig | NodeConfig[] | null
+  getCanvas: () => Konva.Stage | null
+  updateSelected: (patch: Record<string, unknown>) => void
+  getNodes: () => NodeConfig[]
+  getSelectedIds: () => string[]
+  selectNode: (id: string) => void
+  moveToFront: (id: string) => void
+  moveToBack: (id: string) => void
+  moveForward: (id: string) => void
+  moveBackward: (id: string) => void
+  getLabelSettings: () => LabelSettings
+  setLabelSettings: (s: { labelType?: number; density?: number }) => void
 }
 
 interface LabelCanvasProps {
   template: Template
   variableValues: Record<string, string>
+  activeTool: Tool
   onCanvasChange: (json: string) => void
   onBitmapUpdate: (bitmap: Uint8Array, w: number, h: number) => void
-  onSelectionChange: (obj: unknown) => void
+  onSelectionChange: (objs: NodeConfig[]) => void
+  onToolUsed: () => void
 }
 
+let nodeIdCounter = 0
+function genId(prefix: string): string {
+  nodeIdCounter += 1
+  return `${prefix}-${Date.now()}-${nodeIdCounter}`
+}
+
+interface CanvasData {
+  version: 1
+  nodes: NodeConfig[]
+  labelType: number
+  density: number
+}
+
+const DEFAULT_LABEL_TYPE = 1
+const DEFAULT_DENSITY = 3
+
+interface ParsedCanvas {
+  nodes: NodeConfig[]
+  labelType: number
+  density: number
+}
+
+function parseCanvasJson(json: string | null): ParsedCanvas {
+  const empty: ParsedCanvas = {
+    nodes: [],
+    labelType: DEFAULT_LABEL_TYPE,
+    density: DEFAULT_DENSITY,
+  }
+  if (!json) return empty
+  try {
+    const parsed = JSON.parse(json)
+    if (Array.isArray(parsed)) {
+      const nodes = parsed.filter(
+        (n): n is NodeConfig =>
+          n && typeof n === 'object' && typeof n.id === 'string' && typeof n.type === 'string'
+      )
+      return { nodes, labelType: DEFAULT_LABEL_TYPE, density: DEFAULT_DENSITY }
+    }
+    if (parsed && typeof parsed === 'object' && parsed.version === 1) {
+      const data = parsed as Partial<CanvasData>
+      const nodes = Array.isArray(data.nodes)
+        ? data.nodes.filter(
+            (n): n is NodeConfig =>
+              n != null &&
+              typeof n === 'object' &&
+              typeof (n as NodeConfig).id === 'string' &&
+              typeof (n as NodeConfig).type === 'string'
+          )
+        : []
+      return {
+        nodes,
+        labelType: typeof data.labelType === 'number' ? data.labelType : DEFAULT_LABEL_TYPE,
+        density: typeof data.density === 'number' ? data.density : DEFAULT_DENSITY,
+      }
+    }
+    return empty
+  } catch {
+    return empty
+  }
+}
+
+// Compute bounding box of a node in stage coords (axis-aligned, rotation ignored for simplicity)
+function getNodeBBox(node: NodeConfig): { x: number; y: number; width: number; height: number } {
+  if (node.type === 'text' || node.type === 'rect' || node.type === 'image') {
+    const h = 'height' in node ? node.height : 0
+    const w = 'width' in node ? node.width : 0
+    return { x: node.x, y: node.y, width: w, height: h }
+  }
+  if (node.type === 'circle') {
+    return {
+      x: node.x - node.radiusX,
+      y: node.y - node.radiusY,
+      width: node.radiusX * 2,
+      height: node.radiusY * 2,
+    }
+  }
+  if (node.type === 'line') {
+    const xs: number[] = []
+    const ys: number[] = []
+    for (let i = 0; i < node.points.length; i += 2) {
+      xs.push(node.points[i] + node.x)
+      ys.push(node.points[i + 1] + node.y)
+    }
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(...xs) - minX,
+      height: Math.max(...ys) - minY,
+    }
+  }
+  return { x: 0, y: 0, width: 0, height: 0 }
+}
+
+// Set top-left x of a node (bbox aware)
+function setNodeX(node: NodeConfig, newX: number): Partial<NodeConfig> {
+  const bbox = getNodeBBox(node)
+  const dx = newX - bbox.x
+  return { x: node.x + dx } as Partial<NodeConfig>
+}
+
+function setNodeY(node: NodeConfig, newY: number): Partial<NodeConfig> {
+  const bbox = getNodeBBox(node)
+  const dy = newY - bbox.y
+  return { y: node.y + dy } as Partial<NodeConfig>
+}
+
+// Hook wrapper for async image loading for KonvaImage
+function useImage(src: string): HTMLImageElement | null {
+  const [img, setImg] = useState<HTMLImageElement | null>(null)
+  useEffect(() => {
+    if (!src) {
+      setImg(null)
+      return
+    }
+    const image = new window.Image()
+    image.crossOrigin = 'anonymous'
+    let cancelled = false
+    image.onload = () => {
+      if (!cancelled) setImg(image)
+    }
+    image.onerror = () => {
+      if (!cancelled) setImg(null)
+    }
+    image.src = src
+    return () => {
+      cancelled = true
+    }
+  }, [src])
+  return img
+}
+
+interface ImageNodeProps {
+  node: Extract<NodeConfig, { type: 'image' }>
+  onSelect: (e: Konva.KonvaEventObject<Event>) => void
+  onChange: (patch: Partial<NodeConfig>) => void
+  shapeRef: (n: Konva.Node | null) => void
+}
+
+function ImageNode({ node, onSelect, onChange, shapeRef }: ImageNodeProps) {
+  const image = useImage(node.src)
+  const localRef = useRef<Konva.Image>(null)
+  useEffect(() => {
+    shapeRef(localRef.current)
+    return () => shapeRef(null)
+  }, [shapeRef])
+  return (
+    <KonvaImage
+      ref={localRef}
+      id={node.id}
+      image={image ?? undefined}
+      x={node.x}
+      y={node.y}
+      width={node.width}
+      height={node.height}
+      rotation={node.rotation}
+      draggable
+      onClick={onSelect}
+      onTap={onSelect}
+      onDragEnd={(e) => {
+        onChange({ x: e.target.x(), y: e.target.y() })
+      }}
+      onTransformEnd={(e) => {
+        const n = e.target
+        const sx = n.scaleX()
+        const sy = n.scaleY()
+        const newWidth = Math.max(4, n.width() * sx)
+        const newHeight = Math.max(4, n.height() * sy)
+        n.scaleX(1)
+        n.scaleY(1)
+        onChange({
+          x: n.x(),
+          y: n.y(),
+          width: newWidth,
+          height: newHeight,
+          rotation: n.rotation(),
+        })
+      }}
+    />
+  )
+}
+
+const SNAP_THRESHOLD = 6
+
 export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
-  function LabelCanvas({ template, variableValues, onCanvasChange, onBitmapUpdate, onSelectionChange }, ref) {
-    const canvasElRef = useRef<HTMLCanvasElement>(null)
-    const fabricRef = useRef<Canvas | null>(null)
+  function LabelCanvas(
+    {
+      template,
+      variableValues,
+      activeTool,
+      onCanvasChange,
+      onBitmapUpdate,
+      onSelectionChange,
+      onToolUsed,
+    },
+    ref
+  ) {
+    const dims = LABEL_DIMS[template.label_size]
+
+    const initialParsed = parseCanvasJson(template.canvas_json)
+    const [nodes, setNodes] = useState<NodeConfig[]>(() => initialParsed.nodes)
+    const [selectedIds, setSelectedIds] = useState<string[]>([])
+    const [labelType, setLabelType] = useState<number>(initialParsed.labelType)
+    const [density, setDensity] = useState<number>(initialParsed.density)
+    const labelTypeRef = useRef(labelType)
+    const densityRef = useRef(density)
+    const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const pendingImagePosRef = useRef<{ x: number; y: number } | null>(null)
+    useEffect(() => {
+      labelTypeRef.current = labelType
+    }, [labelType])
+    useEffect(() => {
+      densityRef.current = density
+    }, [density])
+
+    const stageRef = useRef<Konva.Stage | null>(null)
+    const layerRef = useRef<Konva.Layer | null>(null)
+    const guideLayerRef = useRef<Konva.Layer | null>(null)
+    const transformerRef = useRef<Konva.Transformer | null>(null)
+    const nodeRefs = useRef<Map<string, Konva.Node>>(new Map())
+    const copiedNodesRef = useRef<NodeConfig[]>([])
+
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const nodesRef = useRef(nodes)
+    const selectedIdsRef = useRef(selectedIds)
+    const activeToolRef = useRef(activeTool)
     const variableValuesRef = useRef(variableValues)
     const onCanvasChangeRef = useRef(onCanvasChange)
     const onBitmapUpdateRef = useRef(onBitmapUpdate)
     const onSelectionChangeRef = useRef(onSelectionChange)
+    const onToolUsedRef = useRef(onToolUsed)
 
-    // Keep refs in sync without re-running effects
-    useEffect(() => { onCanvasChangeRef.current = onCanvasChange }, [onCanvasChange])
-    useEffect(() => { onBitmapUpdateRef.current = onBitmapUpdate }, [onBitmapUpdate])
-    useEffect(() => { onSelectionChangeRef.current = onSelectionChange }, [onSelectionChange])
+    useEffect(() => {
+      nodesRef.current = nodes
+    }, [nodes])
+    useEffect(() => {
+      selectedIdsRef.current = selectedIds
+    }, [selectedIds])
+    useEffect(() => {
+      activeToolRef.current = activeTool
+    }, [activeTool])
+    useEffect(() => {
+      onCanvasChangeRef.current = onCanvasChange
+    }, [onCanvasChange])
+    useEffect(() => {
+      onBitmapUpdateRef.current = onBitmapUpdate
+    }, [onBitmapUpdate])
+    useEffect(() => {
+      onSelectionChangeRef.current = onSelectionChange
+    }, [onSelectionChange])
+    useEffect(() => {
+      onToolUsedRef.current = onToolUsed
+    }, [onToolUsed])
 
-    const dims = LABEL_DIMS[template.label_size]
+    // Reload nodes when template id changes (new template loaded)
+    useEffect(() => {
+      const parsed = parseCanvasJson(template.canvas_json)
+      setNodes(parsed.nodes)
+      setLabelType(parsed.labelType)
+      setDensity(parsed.density)
+      setSelectedIds([])
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [template.id])
 
-    const renderBitmap = useCallback(async (canvas: Canvas) => {
+    // Notify selection changes
+    useEffect(() => {
+      const selected = nodes.filter((n) => selectedIds.includes(n.id))
+      onSelectionChangeRef.current(selected)
+    }, [selectedIds, nodes])
+
+    // Attach transformer to all selected nodes
+    useEffect(() => {
+      const transformer = transformerRef.current
+      if (!transformer) return
+      if (selectedIds.length === 0) {
+        transformer.nodes([])
+        transformer.getLayer()?.batchDraw()
+        return
+      }
+      const selectedKonvaNodes = selectedIds
+        .map((id) => nodeRefs.current.get(id))
+        .filter((n): n is Konva.Node => n != null)
+      transformer.nodes(selectedKonvaNodes)
+      transformer.getLayer()?.batchDraw()
+    }, [selectedIds, nodes])
+
+    const renderBitmap = useCallback(async () => {
+      const stage = stageRef.current
+      if (!stage) return
       const vars = variableValuesRef.current
       const w = dims.w
       const h = dims.h
 
-      // Temporarily substitute variables in text objects
-      const restores: Array<{ obj: IText; original: string }> = []
-      canvas.getObjects().forEach((obj) => {
-        if (obj instanceof IText) {
-          const original = obj.text ?? ''
-          const substituted = applyVariables(original, vars)
-          if (substituted !== original) {
-            restores.push({ obj, original })
-            obj.set('text', substituted)
-          }
+      // Temporarily hide transformer and guides for clean render
+      const transformer = transformerRef.current
+      const transformerWasVisible = transformer?.visible() ?? false
+      if (transformer) {
+        transformer.visible(false)
+      }
+      const guideLayer = guideLayerRef.current
+      const guideLayerWasVisible = guideLayer?.visible() ?? false
+      if (guideLayer) {
+        guideLayer.visible(false)
+      }
+
+      // Temporarily substitute variables in text nodes
+      const restores: Array<{ node: Konva.Text; original: string }> = []
+      stage.find('Text').forEach((k) => {
+        const t = k as Konva.Text
+        const original = t.text() ?? ''
+        const substituted = applyVariables(original, vars)
+        if (substituted !== original) {
+          restores.push({ node: t, original })
+          t.text(substituted)
         }
       })
-      canvas.renderAll()
+      stage.batchDraw()
 
-      const srcCanvas = await fabricToCanvas(canvas, w, h)
+      const srcCanvas = await konvaStageToCanvas(stage, w, h)
       const { bitmap } = canvasTo1BitBitmap(srcCanvas, w, h)
 
-      // Restore original text
-      restores.forEach(({ obj, original }) => obj.set('text', original))
-      canvas.renderAll()
+      // Restore
+      restores.forEach(({ node, original }) => node.text(original))
+      if (transformer && transformerWasVisible) {
+        transformer.visible(true)
+      }
+      if (guideLayer && guideLayerWasVisible) {
+        guideLayer.visible(true)
+      }
+      stage.batchDraw()
 
       onBitmapUpdateRef.current(bitmap, w, h)
     }, [dims])
 
-    const scheduleUpdate = useCallback((canvas: Canvas) => {
+    const scheduleUpdate = useCallback(() => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(async () => {
-        const json = JSON.stringify(canvas.toJSON())
+        const data: CanvasData = {
+          version: 1,
+          nodes: nodesRef.current,
+          labelType: labelTypeRef.current,
+          density: densityRef.current,
+        }
+        const json = JSON.stringify(data)
         onCanvasChangeRef.current(json)
-        await renderBitmap(canvas)
+        await renderBitmap()
       }, 300)
     }, [renderBitmap])
+
+    // Schedule update on any node/settings change
+    useEffect(() => {
+      scheduleUpdate()
+    }, [nodes, labelType, density, scheduleUpdate])
 
     // Re-render bitmap when variable preview values change
     useEffect(() => {
       variableValuesRef.current = variableValues
-      const canvas = fabricRef.current
-      if (canvas) renderBitmap(canvas)
+      renderBitmap()
     }, [variableValues, renderBitmap])
 
+    // Initial bitmap render after mount
     useEffect(() => {
-      if (!canvasElRef.current) return
-
-      let alive = true
-
-      const init = async () => {
-        if (!alive || !canvasElRef.current) return
-
-        const canvas = new Canvas(canvasElRef.current, {
-          width: dims.w,
-          height: dims.h,
-          backgroundColor: '#ffffff',
-          selection: true,
-        })
-        fabricRef.current = canvas
-
-        if (template.canvas_json) {
-          await canvas.loadFromJSON(JSON.parse(template.canvas_json))
-          if (!alive) return
-          canvas.renderAll()
-        }
-        await renderBitmap(canvas)
-        if (!alive) return
-
-        const handleModified = () => scheduleUpdate(canvas)
-        canvas.on('object:modified', handleModified)
-        canvas.on('object:added', handleModified)
-        canvas.on('object:removed', handleModified)
-        canvas.on('selection:created', () => onSelectionChangeRef.current(canvas.getActiveObject()))
-        canvas.on('selection:updated', () => onSelectionChangeRef.current(canvas.getActiveObject()))
-        canvas.on('selection:cleared', () => onSelectionChangeRef.current(null))
-      }
-
-      init()
-
-      return () => {
-        alive = false
-        if (debounceRef.current) clearTimeout(debounceRef.current)
-        const c = fabricRef.current
-        fabricRef.current = null
-        if (c) c.dispose()
-      }
-      // Only run on mount / template id change
+      const t = setTimeout(() => {
+        renderBitmap()
+      }, 50)
+      return () => clearTimeout(t)
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [template.id])
 
+    // Cleanup on unmount
+    useEffect(() => {
+      return () => {
+        if (debounceRef.current) clearTimeout(debounceRef.current)
+      }
+    }, [])
+
+    const updateNode = useCallback((id: string, patch: Partial<NodeConfig>) => {
+      setNodes((prev) =>
+        prev.map((n) => (n.id === id ? ({ ...n, ...patch } as NodeConfig) : n))
+      )
+    }, [])
+
+    const registerNodeRef = useCallback((id: string) => {
+      return (n: Konva.Node | null) => {
+        if (n) nodeRefs.current.set(id, n)
+        else nodeRefs.current.delete(id)
+      }
+    }, [])
+
+    const addTextAt = useCallback((x: number, y: number) => {
+      const id = genId('text')
+      const newNode: NodeConfig = {
+        id,
+        type: 'text',
+        x,
+        y,
+        width: 160,
+        rotation: 0,
+        text: 'Label text',
+        fontSize: 24,
+        fontStyle: 'normal',
+        fontFamily: 'Arial',
+        align: 'left',
+        fill: '#000000',
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const addRectAt = useCallback((x: number, y: number) => {
+      const id = genId('rect')
+      const newNode: NodeConfig = {
+        id,
+        type: 'rect',
+        x,
+        y,
+        width: 80,
+        height: 40,
+        rotation: 0,
+        fill: '#ffffff',
+        stroke: '#000000',
+        strokeWidth: 2,
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const addCircleAt = useCallback((x: number, y: number) => {
+      const id = genId('circle')
+      const newNode: NodeConfig = {
+        id,
+        type: 'circle',
+        x: x + 30,
+        y: y + 30,
+        radiusX: 30,
+        radiusY: 30,
+        fill: '#ffffff',
+        stroke: '#000000',
+        strokeWidth: 2,
+        draggable: true,
+        rotation: 0,
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const addLineAt = useCallback((x: number, y: number) => {
+      const id = genId('line')
+      const newNode: NodeConfig = {
+        id,
+        type: 'line',
+        x,
+        y,
+        points: [0, 0, 100, 0],
+        stroke: '#000000',
+        strokeWidth: 2,
+        draggable: true,
+        rotation: 0,
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const addQRAt = useCallback(async (x: number, y: number, content: string) => {
+      const dataUrl = await generateQRDataURL(content, 80)
+      const id = genId('qr')
+      const newNode: NodeConfig = {
+        id,
+        type: 'image',
+        x,
+        y,
+        width: 80,
+        height: 80,
+        rotation: 0,
+        src: dataUrl,
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const addImageAt = useCallback(async (x: number, y: number, dataUrl: string) => {
+      return new Promise<string>((resolve, reject) => {
+        const img = new window.Image()
+        img.onload = () => {
+          const naturalW = img.naturalWidth || img.width || 100
+          const naturalH = img.naturalHeight || img.height || 100
+          const maxW = 100
+          let w = naturalW
+          let h = naturalH
+          if (w > maxW) {
+            const ratio = maxW / w
+            w = maxW
+            h = Math.max(1, Math.round(naturalH * ratio))
+          }
+          const id = genId('image')
+          const newNode: NodeConfig = {
+            id,
+            type: 'image',
+            x,
+            y,
+            width: w,
+            height: h,
+            rotation: 0,
+            src: dataUrl,
+          }
+          setNodes((prev) => [...prev, newNode])
+          setSelectedIds([id])
+          resolve(id)
+        }
+        img.onerror = () => reject(new Error('Image failed to load'))
+        img.src = dataUrl
+      })
+    }, [])
+
+    const handleImageFile = useCallback(
+      (file: File, x: number, y: number) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = reader.result
+          if (typeof result === 'string') {
+            void addImageAt(x, y, result)
+          }
+        }
+        reader.readAsDataURL(file)
+      },
+      [addImageAt]
+    )
+
+    const addBarcodeAt = useCallback(async (x: number, y: number, content: string) => {
+      const dataUrl = await generateBarcodeDataURLAsync(content, 120, 40)
+      const id = genId('barcode')
+      const newNode: NodeConfig = {
+        id,
+        type: 'image',
+        x,
+        y,
+        width: 120,
+        height: 40,
+        rotation: 0,
+        src: dataUrl,
+      }
+      setNodes((prev) => [...prev, newNode])
+      setSelectedIds([id])
+      return id
+    }, [])
+
+    const deleteSelectedInternal = useCallback(() => {
+      const ids = selectedIdsRef.current
+      if (ids.length === 0) return
+      setNodes((prev) => prev.filter((n) => !ids.includes(n.id)))
+      setSelectedIds([])
+    }, [])
+
+    const copySelectedInternal = useCallback(() => {
+      const ids = selectedIdsRef.current
+      const selected = nodesRef.current.filter((n) => ids.includes(n.id))
+      if (selected.length === 0) return
+      copiedNodesRef.current = JSON.parse(JSON.stringify(selected)) as NodeConfig[]
+    }, [])
+
+    const pasteSelectedInternal = useCallback(() => {
+      const copies = copiedNodesRef.current
+      if (!copies || copies.length === 0) return
+      const newNodes: NodeConfig[] = copies.map((c) => {
+        const clone = JSON.parse(JSON.stringify(c)) as NodeConfig
+        clone.id = genId(clone.type)
+        clone.x = (clone.x ?? 0) + 15
+        clone.y = (clone.y ?? 0) + 15
+        return clone
+      })
+      setNodes((prev) => [...prev, ...newNodes])
+      setSelectedIds(newNodes.map((n) => n.id))
+    }, [])
+
+    const alignSelectedInternal = useCallback((direction: AlignDirection) => {
+      const ids = selectedIdsRef.current
+      if (ids.length < 2) return
+      const targets = nodesRef.current.filter((n) => ids.includes(n.id))
+      if (targets.length < 2) return
+
+      const bboxes = targets.map((n) => ({ node: n, bbox: getNodeBBox(n) }))
+      const lefts = bboxes.map((b) => b.bbox.x)
+      const rights = bboxes.map((b) => b.bbox.x + b.bbox.width)
+      const tops = bboxes.map((b) => b.bbox.y)
+      const bottoms = bboxes.map((b) => b.bbox.y + b.bbox.height)
+      const centersX = bboxes.map((b) => b.bbox.x + b.bbox.width / 2)
+      const centersY = bboxes.map((b) => b.bbox.y + b.bbox.height / 2)
+
+      const minLeft = Math.min(...lefts)
+      const maxRight = Math.max(...rights)
+      const minTop = Math.min(...tops)
+      const maxBottom = Math.max(...bottoms)
+      const avgCenterX = centersX.reduce((a, b) => a + b, 0) / centersX.length
+      const avgCenterY = centersY.reduce((a, b) => a + b, 0) / centersY.length
+
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (!ids.includes(n.id)) return n
+          const bbox = getNodeBBox(n)
+          let patch: Partial<NodeConfig> = {}
+          switch (direction) {
+            case 'left':
+              patch = setNodeX(n, minLeft)
+              break
+            case 'right':
+              patch = setNodeX(n, maxRight - bbox.width)
+              break
+            case 'center-h':
+              patch = setNodeX(n, avgCenterX - bbox.width / 2)
+              break
+            case 'top':
+              patch = setNodeY(n, minTop)
+              break
+            case 'bottom':
+              patch = setNodeY(n, maxBottom - bbox.height)
+              break
+            case 'middle-v':
+              patch = setNodeY(n, avgCenterY - bbox.height / 2)
+              break
+          }
+          return { ...n, ...patch } as NodeConfig
+        })
+      )
+    }, [])
+
+    const alignToDocumentInternal = useCallback((direction: AlignDocDirection) => {
+      const ids = selectedIdsRef.current
+      if (ids.length === 0) return
+      const targets = nodesRef.current.filter((n) => ids.includes(n.id))
+      if (targets.length === 0) return
+
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (!ids.includes(n.id)) return n
+          let patch: Partial<NodeConfig> = {}
+          if (n.type === 'circle') {
+            switch (direction) {
+              case 'left':
+                patch = { x: n.radiusX }
+                break
+              case 'center-h':
+                patch = { x: dims.w / 2 }
+                break
+              case 'right':
+                patch = { x: dims.w - n.radiusX }
+                break
+              case 'top':
+                patch = { y: n.radiusY }
+                break
+              case 'middle-v':
+                patch = { y: dims.h / 2 }
+                break
+              case 'bottom':
+                patch = { y: dims.h - n.radiusY }
+                break
+            }
+          } else {
+            const bbox = getNodeBBox(n)
+            switch (direction) {
+              case 'left':
+                patch = setNodeX(n, 0)
+                break
+              case 'center-h':
+                patch = setNodeX(n, (dims.w - bbox.width) / 2)
+                break
+              case 'right':
+                patch = setNodeX(n, dims.w - bbox.width)
+                break
+              case 'top':
+                patch = setNodeY(n, 0)
+                break
+              case 'middle-v':
+                patch = setNodeY(n, (dims.h - bbox.height) / 2)
+                break
+              case 'bottom':
+                patch = setNodeY(n, dims.h - bbox.height)
+                break
+            }
+          }
+          return { ...n, ...patch } as NodeConfig
+        })
+      )
+      scheduleUpdate()
+    }, [dims, scheduleUpdate])
+
+    const moveToFrontInternal = useCallback((id: string) => {
+      setNodes((prev) => {
+        const idx = prev.findIndex((n) => n.id === id)
+        if (idx < 0 || idx === prev.length - 1) return prev
+        const next = prev.slice()
+        const [item] = next.splice(idx, 1)
+        next.push(item)
+        return next
+      })
+    }, [])
+
+    const moveToBackInternal = useCallback((id: string) => {
+      setNodes((prev) => {
+        const idx = prev.findIndex((n) => n.id === id)
+        if (idx <= 0) return prev
+        const next = prev.slice()
+        const [item] = next.splice(idx, 1)
+        next.unshift(item)
+        return next
+      })
+    }, [])
+
+    const moveForwardInternal = useCallback((id: string) => {
+      setNodes((prev) => {
+        const idx = prev.findIndex((n) => n.id === id)
+        if (idx < 0 || idx === prev.length - 1) return prev
+        const next = prev.slice()
+        const item = next[idx]
+        next[idx] = next[idx + 1]
+        next[idx + 1] = item
+        return next
+      })
+    }, [])
+
+    const moveBackwardInternal = useCallback((id: string) => {
+      setNodes((prev) => {
+        const idx = prev.findIndex((n) => n.id === id)
+        if (idx <= 0) return prev
+        const next = prev.slice()
+        const item = next[idx]
+        next[idx] = next[idx - 1]
+        next[idx - 1] = item
+        return next
+      })
+    }, [])
+
     useImperativeHandle(ref, () => ({
       addText() {
-        const canvas = fabricRef.current
-        if (!canvas) return
-        const text = new IText('Label text', {
-          left: 20,
-          top: 20,
-          fontSize: 24,
-          fill: '#000000',
-          fontFamily: 'Arial',
-        })
-        canvas.add(text)
-        canvas.setActiveObject(text)
-        canvas.renderAll()
+        addTextAt(20, 20)
       },
-
       addRect() {
-        const canvas = fabricRef.current
-        if (!canvas) return
-        const rect = new Rect({
-          left: 20,
-          top: 20,
-          width: 80,
-          height: 40,
-          fill: '#ffffff',
-          stroke: '#000000',
-          strokeWidth: 2,
-        })
-        canvas.add(rect)
-        canvas.setActiveObject(rect)
-        canvas.renderAll()
+        addRectAt(20, 20)
       },
-
+      addCircle() {
+        addCircleAt(20, 20)
+      },
+      addLine() {
+        addLineAt(20, 20)
+      },
       async addQR(content: string) {
-        const canvas = fabricRef.current
-        if (!canvas) return
-        const dataUrl = await generateQRDataURL(content, 80)
-        const img = await FabricImage.fromURL(dataUrl)
-        img.set({ left: 20, top: 20 })
-        canvas.add(img)
-        canvas.setActiveObject(img)
-        canvas.renderAll()
+        await addQRAt(20, 20, content)
       },
-
       async addBarcode(content: string) {
-        const canvas = fabricRef.current
-        if (!canvas) return
-        const dataUrl = await generateBarcodeDataURLAsync(content, 120, 40)
-        const img = await FabricImage.fromURL(dataUrl)
-        img.set({ left: 20, top: 20 })
-        canvas.add(img)
-        canvas.setActiveObject(img)
-        canvas.renderAll()
+        await addBarcodeAt(20, 20, content)
       },
-
       deleteSelected() {
-        const canvas = fabricRef.current
-        if (!canvas) return
-        const active = canvas.getActiveObject()
-        if (!active) return
-        canvas.remove(active)
-        canvas.discardActiveObject()
-        canvas.renderAll()
+        deleteSelectedInternal()
       },
-
+      copySelected() {
+        copySelectedInternal()
+      },
+      pasteSelected() {
+        pasteSelectedInternal()
+      },
+      alignSelected(direction: AlignDirection) {
+        alignSelectedInternal(direction)
+      },
+      alignToDocument(direction: AlignDocDirection) {
+        alignToDocumentInternal(direction)
+      },
       getSelectedObject() {
-        return fabricRef.current?.getActiveObject() ?? null
+        const ids = selectedIdsRef.current
+        if (ids.length === 0) return null
+        const selected = nodesRef.current.filter((n) => ids.includes(n.id))
+        if (selected.length === 1) return selected[0]
+        return selected
       },
-
       getCanvas() {
-        return fabricRef.current
+        return stageRef.current
+      },
+      updateSelected(patch: Record<string, unknown>) {
+        const ids = selectedIdsRef.current
+        if (ids.length !== 1) return
+        const id = ids[0]
+        setNodes((prev) =>
+          prev.map((n) => (n.id === id ? ({ ...n, ...patch } as NodeConfig) : n))
+        )
+      },
+      getNodes() {
+        return nodesRef.current
+      },
+      getSelectedIds() {
+        return selectedIdsRef.current
+      },
+      selectNode(id: string) {
+        setSelectedIds([id])
+      },
+      moveToFront(id: string) {
+        moveToFrontInternal(id)
+      },
+      moveToBack(id: string) {
+        moveToBackInternal(id)
+      },
+      moveForward(id: string) {
+        moveForwardInternal(id)
+      },
+      moveBackward(id: string) {
+        moveBackwardInternal(id)
+      },
+      getLabelSettings() {
+        return { labelType: labelTypeRef.current, density: densityRef.current }
+      },
+      setLabelSettings(s: { labelType?: number; density?: number }) {
+        if (typeof s.labelType === 'number') setLabelType(s.labelType)
+        if (typeof s.density === 'number') setDensity(s.density)
       },
     }))
 
+    // Keyboard shortcuts: copy/paste/delete
+    useEffect(() => {
+      const isEditableTarget = (el: EventTarget | null): boolean => {
+        if (!(el instanceof HTMLElement)) return false
+        const tag = el.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+        if (el.isContentEditable) return true
+        return false
+      }
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (isEditableTarget(e.target)) return
+        const mod = e.ctrlKey || e.metaKey
+        if (mod && e.key.toLowerCase() === 'c') {
+          copySelectedInternal()
+          e.preventDefault()
+          return
+        }
+        if (mod && e.key.toLowerCase() === 'v') {
+          pasteSelectedInternal()
+          e.preventDefault()
+          return
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          if (selectedIdsRef.current.length === 0) return
+          deleteSelectedInternal()
+          e.preventDefault()
+          return
+        }
+        if (mod && e.key === ']') {
+          const ids = selectedIdsRef.current
+          if (ids.length !== 1) return
+          moveForwardInternal(ids[0])
+          e.preventDefault()
+          return
+        }
+        if (mod && e.key === '[') {
+          const ids = selectedIdsRef.current
+          if (ids.length !== 1) return
+          moveBackwardInternal(ids[0])
+          e.preventDefault()
+          return
+        }
+      }
+      window.addEventListener('keydown', handleKeyDown)
+      return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [
+      copySelectedInternal,
+      pasteSelectedInternal,
+      deleteSelectedInternal,
+      moveForwardInternal,
+      moveBackwardInternal,
+    ])
+
+    // Selection helpers
+    const handleSelectNode = useCallback(
+      (id: string, e: Konva.KonvaEventObject<Event>) => {
+        const evt = e.evt as unknown as { shiftKey?: boolean }
+        const shift = !!evt?.shiftKey
+        setSelectedIds((prev) => {
+          if (shift) {
+            if (prev.includes(id)) return prev.filter((x) => x !== id)
+            return [...prev, id]
+          }
+          return [id]
+        })
+      },
+      []
+    )
+
+    // Stage click/mouse-down - deselect or add element by tool
+    const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+      const target = e.target
+      const stage = target.getStage()
+      const isBg = target === stage || target.name() === 'bg'
+      if (!isBg) return
+
+      const tool = activeToolRef.current
+      const pos = stage?.getPointerPosition()
+      if (!pos) {
+        setSelectedIds([])
+        return
+      }
+      const x = pos.x
+      const y = pos.y
+
+      if (tool === 'select') {
+        setSelectedIds([])
+        return
+      }
+
+      if (tool === 'text') {
+        addTextAt(x, y)
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'rect') {
+        addRectAt(x, y)
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'circle') {
+        addCircleAt(x, y)
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'line') {
+        addLineAt(x, y)
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'qr') {
+        const content = window.prompt('QR code content', '{{url}}')
+        if (content != null) {
+          void addQRAt(x, y, content)
+        }
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'barcode') {
+        const content = window.prompt('Barcode content', '{{barcode}}')
+        if (content != null) {
+          void addBarcodeAt(x, y, content)
+        }
+        onToolUsedRef.current()
+        return
+      }
+      if (tool === 'image') {
+        pendingImagePosRef.current = { x, y }
+        fileInputRef.current?.click()
+        return
+      }
+    }
+
+    const handleImageInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      const pos = pendingImagePosRef.current
+      // Reset input value so same file re-selection re-fires onChange
+      e.target.value = ''
+      pendingImagePosRef.current = null
+      if (!file || !pos) return
+      handleImageFile(file, pos.x, pos.y)
+      onToolUsedRef.current()
+    }
+
+    // --- Snap guides ---
+    const clearGuides = useCallback(() => {
+      const gl = guideLayerRef.current
+      if (!gl) return
+      gl.destroyChildren()
+      gl.batchDraw()
+    }, [])
+
+    const drawGuide = useCallback((orientation: 'v' | 'h', pos: number) => {
+      const gl = guideLayerRef.current
+      if (!gl) return
+      const line = new Konva.Line({
+        stroke: '#ff3b30',
+        strokeWidth: 1,
+        dash: [4, 4],
+        listening: false,
+        points:
+          orientation === 'v'
+            ? [pos, 0, pos, dims.h]
+            : [0, pos, dims.w, pos],
+      })
+      gl.add(line)
+    }, [dims.h, dims.w])
+
+    // Returns snap points for a given node using current konva-reported x/y
+    const getSnapPointsForKonva = (node: Konva.Node): { vertical: number[]; horizontal: number[] } => {
+      const x = node.x()
+      const y = node.y()
+      const cr = node as unknown as { width?: () => number; height?: () => number }
+      const w = typeof cr.width === 'function' ? cr.width() : 0
+      const h = typeof cr.height === 'function' ? cr.height() : 0
+      // Approximation: use bounding rect where possible
+      try {
+        const rect = (node as Konva.Shape).getClientRect({ skipTransform: false })
+        return {
+          vertical: [rect.x, rect.x + rect.width / 2, rect.x + rect.width],
+          horizontal: [rect.y, rect.y + rect.height / 2, rect.y + rect.height],
+        }
+      } catch {
+        return {
+          vertical: [x, x + w / 2, x + w],
+          horizontal: [y, y + h / 2, y + h],
+        }
+      }
+    }
+
+    const handleStageDragMove = useCallback(
+      (e: Konva.KonvaEventObject<DragEvent>) => {
+        const gl = guideLayerRef.current
+        if (!gl) return
+        const dragged = e.target
+        // Ignore stage-level drags (shouldn't happen but guard)
+        if (dragged === stageRef.current) return
+        // Ignore transformer
+        if (dragged.getClassName() === 'Transformer') return
+
+        const draggedId = dragged.id()
+        if (!draggedId) return
+
+        const snap = getSnapPointsForKonva(dragged)
+        // Build guide source points from other nodes and canvas
+        const vSources: number[] = [0, dims.w / 2, dims.w]
+        const hSources: number[] = [0, dims.h / 2, dims.h]
+        nodesRef.current.forEach((n) => {
+          if (n.id === draggedId) return
+          const k = nodeRefs.current.get(n.id)
+          if (!k) return
+          const snaps = getSnapPointsForKonva(k)
+          vSources.push(...snaps.vertical)
+          hSources.push(...snaps.horizontal)
+        })
+
+        gl.destroyChildren()
+
+        let bestVDelta = 0
+        let bestVGuideLine: number | null = null
+        let bestVAbs = Infinity
+        snap.vertical.forEach((pt) => {
+          vSources.forEach((src) => {
+            const d = src - pt
+            const ad = Math.abs(d)
+            if (ad <= SNAP_THRESHOLD && ad < bestVAbs) {
+              bestVAbs = ad
+              bestVDelta = d
+              bestVGuideLine = src
+            }
+          })
+        })
+
+        let bestHDelta = 0
+        let bestHGuideLine: number | null = null
+        let bestHAbs = Infinity
+        snap.horizontal.forEach((pt) => {
+          hSources.forEach((src) => {
+            const d = src - pt
+            const ad = Math.abs(d)
+            if (ad <= SNAP_THRESHOLD && ad < bestHAbs) {
+              bestHAbs = ad
+              bestHDelta = d
+              bestHGuideLine = src
+            }
+          })
+        })
+
+        if (bestVGuideLine != null) {
+          dragged.x(dragged.x() + bestVDelta)
+          drawGuide('v', bestVGuideLine)
+        }
+        if (bestHGuideLine != null) {
+          dragged.y(dragged.y() + bestHDelta)
+          drawGuide('h', bestHGuideLine)
+        }
+        gl.batchDraw()
+      },
+      [dims.h, dims.w, drawGuide]
+    )
+
+    const handleStageDragEnd = useCallback(() => {
+      clearGuides()
+    }, [clearGuides])
+
     return (
       <div className="flex items-center justify-center flex-1 bg-[#1a1a1a] overflow-auto p-4">
-        <div
-          className="shadow-2xl border border-white/10"
-          style={{ lineHeight: 0 }}
-        >
-          <canvas ref={canvasElRef} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".png,.jpg,.jpeg,.svg,image/*"
+          style={{ display: 'none' }}
+          onChange={handleImageInputChange}
+        />
+        <div className="shadow-2xl border border-white/10" style={{ lineHeight: 0 }}>
+          <Stage
+            width={dims.w}
+            height={dims.h}
+            ref={stageRef}
+            onMouseDown={handleStageMouseDown}
+            onTouchStart={handleStageMouseDown}
+            onDragMove={handleStageDragMove}
+            onDragEnd={handleStageDragEnd}
+          >
+            <Layer ref={layerRef}>
+              <Rect
+                x={0}
+                y={0}
+                width={dims.w}
+                height={dims.h}
+                fill="white"
+                listening={true}
+                name="bg"
+              />
+              {nodes.map((node) => {
+                if (node.type === 'text') {
+                  return (
+                    <Text
+                      key={node.id}
+                      id={node.id}
+                      ref={registerNodeRef(node.id)}
+                      x={node.x}
+                      y={node.y}
+                      width={node.width}
+                      rotation={node.rotation}
+                      text={node.text}
+                      fontSize={node.fontSize}
+                      fontStyle={node.fontStyle}
+                      fontFamily={node.fontFamily}
+                      align={node.align}
+                      fill={node.fill}
+                      draggable
+                      onClick={(e) => handleSelectNode(node.id, e)}
+                      onTap={(e) => handleSelectNode(node.id, e)}
+                      onDragEnd={(e) => {
+                        updateNode(node.id, { x: e.target.x(), y: e.target.y() })
+                      }}
+                      onTransformEnd={(e) => {
+                        const n = e.target as Konva.Text
+                        const sx = n.scaleX()
+                        const newWidth = Math.max(20, n.width() * sx)
+                        n.scaleX(1)
+                        n.scaleY(1)
+                        updateNode(node.id, {
+                          x: n.x(),
+                          y: n.y(),
+                          width: newWidth,
+                          rotation: n.rotation(),
+                        })
+                      }}
+                    />
+                  )
+                }
+                if (node.type === 'rect') {
+                  return (
+                    <Rect
+                      key={node.id}
+                      id={node.id}
+                      ref={registerNodeRef(node.id)}
+                      x={node.x}
+                      y={node.y}
+                      width={node.width}
+                      height={node.height}
+                      rotation={node.rotation}
+                      fill={node.fill}
+                      stroke={node.stroke}
+                      strokeWidth={node.strokeWidth}
+                      draggable
+                      onClick={(e) => handleSelectNode(node.id, e)}
+                      onTap={(e) => handleSelectNode(node.id, e)}
+                      onDragEnd={(e) => {
+                        updateNode(node.id, { x: e.target.x(), y: e.target.y() })
+                      }}
+                      onTransformEnd={(e) => {
+                        const n = e.target as Konva.Rect
+                        const sx = n.scaleX()
+                        const sy = n.scaleY()
+                        const newWidth = Math.max(4, n.width() * sx)
+                        const newHeight = Math.max(4, n.height() * sy)
+                        n.scaleX(1)
+                        n.scaleY(1)
+                        updateNode(node.id, {
+                          x: n.x(),
+                          y: n.y(),
+                          width: newWidth,
+                          height: newHeight,
+                          rotation: n.rotation(),
+                        })
+                      }}
+                    />
+                  )
+                }
+                if (node.type === 'circle') {
+                  return (
+                    <Ellipse
+                      key={node.id}
+                      id={node.id}
+                      ref={registerNodeRef(node.id)}
+                      x={node.x}
+                      y={node.y}
+                      radiusX={node.radiusX}
+                      radiusY={node.radiusY}
+                      fill={node.fill}
+                      stroke={node.stroke}
+                      strokeWidth={node.strokeWidth}
+                      rotation={node.rotation}
+                      draggable
+                      onClick={(e) => handleSelectNode(node.id, e)}
+                      onTap={(e) => handleSelectNode(node.id, e)}
+                      onDragEnd={(e) => {
+                        updateNode(node.id, { x: e.target.x(), y: e.target.y() })
+                      }}
+                      onTransformEnd={(e) => {
+                        const n = e.target as Konva.Ellipse
+                        const sx = n.scaleX()
+                        const sy = n.scaleY()
+                        const newRX = Math.max(2, n.radiusX() * sx)
+                        const newRY = Math.max(2, n.radiusY() * sy)
+                        n.scaleX(1)
+                        n.scaleY(1)
+                        updateNode(node.id, {
+                          x: n.x(),
+                          y: n.y(),
+                          radiusX: newRX,
+                          radiusY: newRY,
+                          rotation: n.rotation(),
+                        })
+                      }}
+                    />
+                  )
+                }
+                if (node.type === 'line') {
+                  return (
+                    <Line
+                      key={node.id}
+                      id={node.id}
+                      ref={registerNodeRef(node.id)}
+                      x={node.x}
+                      y={node.y}
+                      points={node.points}
+                      stroke={node.stroke}
+                      strokeWidth={node.strokeWidth}
+                      rotation={node.rotation}
+                      hitStrokeWidth={Math.max(10, node.strokeWidth + 6)}
+                      draggable
+                      onClick={(e) => handleSelectNode(node.id, e)}
+                      onTap={(e) => handleSelectNode(node.id, e)}
+                      onDragEnd={(e) => {
+                        updateNode(node.id, { x: e.target.x(), y: e.target.y() })
+                      }}
+                      onTransformEnd={(e) => {
+                        const n = e.target as Konva.Line
+                        const sx = n.scaleX()
+                        const sy = n.scaleY()
+                        const pts = n.points()
+                        const newPts: number[] = []
+                        for (let i = 0; i < pts.length; i += 2) {
+                          newPts.push(pts[i] * sx, pts[i + 1] * sy)
+                        }
+                        n.scaleX(1)
+                        n.scaleY(1)
+                        updateNode(node.id, {
+                          x: n.x(),
+                          y: n.y(),
+                          points: newPts,
+                          rotation: n.rotation(),
+                        })
+                      }}
+                    />
+                  )
+                }
+                if (node.type === 'image') {
+                  return (
+                    <ImageNode
+                      key={node.id}
+                      node={node}
+                      onSelect={(e) => handleSelectNode(node.id, e)}
+                      onChange={(patch) => updateNode(node.id, patch)}
+                      shapeRef={registerNodeRef(node.id)}
+                    />
+                  )
+                }
+                return null
+              })}
+              <Transformer
+                ref={transformerRef}
+                rotateEnabled={true}
+                boundBoxFunc={(oldBox, newBox) => {
+                  if (newBox.width < 5 || newBox.height < 5) return oldBox
+                  return newBox
+                }}
+              />
+            </Layer>
+            <Layer ref={guideLayerRef} listening={false} />
+          </Stage>
         </div>
       </div>
     )
