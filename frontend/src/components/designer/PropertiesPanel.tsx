@@ -32,6 +32,9 @@ interface ObjState {
   // circle
   radiusX: number
   radiusY: number
+  // image
+  ditherAlgorithm: 'threshold' | 'floyd-steinberg' | 'atkinson' | 'ordered'
+  ditherThreshold: number
   // line
   lineLength: number
   lineAngle: number
@@ -73,6 +76,8 @@ function readState(node: NodeConfig | null): ObjState {
     strokeWidth: 1,
     radiusX: 0,
     radiusY: 0,
+    ditherAlgorithm: 'threshold' as const,
+    ditherThreshold: 128,
     lineLength: 100,
     lineAngle: 0,
     content: '',
@@ -153,6 +158,8 @@ function readState(node: NodeConfig | null): ObjState {
     ...base,
     width: Math.round(node.width ?? 0),
     height: Math.round(node.height ?? 0),
+    ditherAlgorithm: ((node as Extract<NodeConfig, { type: 'image' }>).ditherAlgorithm ?? 'threshold') as ObjState['ditherAlgorithm'],
+    ditherThreshold: (node as Extract<NodeConfig, { type: 'image' }>).ditherThreshold ?? 128,
   }
 }
 
@@ -245,6 +252,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
       if (single.type === 'image') {
         nodePatch.width = next.width
         nodePatch.height = next.height
+        nodePatch.ditherAlgorithm = next.ditherAlgorithm
+        nodePatch.ditherThreshold = next.ditherThreshold
       }
 
       if (single.type === 'qr' || single.type === 'barcode') {
@@ -287,6 +296,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
   const isRectObj = node.type === 'rect'
   const isCircle = node.type === 'circle'
   const isLine = node.type === 'line'
+  const isImage = node.type === 'image'
   const isQR = node.type === 'qr'
   const isBarcode = node.type === 'barcode'
 
@@ -528,6 +538,45 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               min={0}
               max={20}
               onChange={(e) => apply({ strokeWidth: Number(e.target.value) })}
+            />
+          </label>
+        </section>
+      )}
+
+      {isImage && (
+        <section className="flex flex-col gap-3">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Dithering</p>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Algorithm</span>
+            <div className="grid grid-cols-2 gap-1">
+              {(['threshold', 'floyd-steinberg', 'atkinson', 'ordered'] as const).map((alg) => (
+                <button
+                  key={alg}
+                  type="button"
+                  onClick={() => apply({
+                    ditherAlgorithm: state.ditherAlgorithm === alg ? 'threshold' : alg,
+                    ditherThreshold: state.ditherAlgorithm === alg ? 128 : state.ditherThreshold,
+                  })}
+                  className={`text-xs py-1 px-1 rounded border transition-colors capitalize ${
+                    state.ditherAlgorithm === alg
+                      ? 'bg-blue-600 text-white border-blue-500'
+                      : 'bg-[#1a1a1a] text-gray-300 border-white/20 hover:bg-[#242424]'
+                  }`}
+                >
+                  {alg === 'floyd-steinberg' ? 'Floyd-S.' : alg[0].toUpperCase() + alg.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Threshold ({state.ditherThreshold})</span>
+            <input
+              type="range"
+              min={0}
+              max={255}
+              value={state.ditherThreshold}
+              onChange={(e) => apply({ ditherThreshold: Number(e.target.value) })}
+              className="w-full"
             />
           </label>
         </section>

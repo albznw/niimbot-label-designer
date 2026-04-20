@@ -8,6 +8,8 @@ interface BitmapPreviewProps {
   height: number
   labelSize: LabelSize
   orientation?: LabelOrientation
+  printCount?: number
+  activePrintRow?: number
 }
 
 const MAX_W = 400
@@ -66,6 +68,8 @@ export function BitmapPreview({
   height,
   labelSize,
   orientation = 'landscape',
+  printCount = 1,
+  activePrintRow = 0,
 }: BitmapPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const modalCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -123,6 +127,7 @@ export function BitmapPreview({
 
         <p className="text-xs text-gray-600">
           {width}×{height}px · B1 · 203 DPI · {labelSize}mm
+          {printCount > 1 ? ` · ${printCount} labels (row ${activePrintRow + 1})` : ' · 1 label'}
         </p>
       </div>
 

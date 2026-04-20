@@ -9,10 +9,11 @@ import {
   mdiQrcode,
   mdiBarcode,
   mdiImageOutline,
+  mdiImageMultipleOutline,
   mdiTrashCanOutline,
 } from '@mdi/js'
 
-export type Tool = 'select' | 'text' | 'rect' | 'circle' | 'line' | 'qr' | 'barcode' | 'image'
+export type Tool = 'select' | 'text' | 'rect' | 'circle' | 'line' | 'qr' | 'barcode' | 'image' | 'icon'
 
 export interface ToolSidebarProps {
   activeTool: Tool
@@ -38,6 +39,7 @@ const TOOLS: ToolEntry[] = [
   { id: 'qr', label: 'QR', title: 'QR Code (Q)', icon: <Icon path={mdiQrcode} size={0.8} /> },
   { id: 'barcode', label: 'Barcode', title: 'Barcode (B)', icon: <Icon path={mdiBarcode} size={0.8} /> },
   { id: 'image', label: 'Image', title: 'Image (I)', icon: <Icon path={mdiImageOutline} size={0.8} /> },
+  { id: 'icon', label: 'Icon', title: 'Icon picker', icon: <Icon path={mdiImageMultipleOutline} size={0.8} /> },
 ]
 
 export function ToolSidebar({ activeTool, onToolChange, hasSelection, onDelete, onImageUpload }: ToolSidebarProps) {

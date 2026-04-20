@@ -3,12 +3,17 @@ import type { Variable } from '../../types/project'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { Input } from '../ui/Input'
+import { PrintBatchTable } from './PrintBatchTable'
 
 interface VariableListProps {
   variables: Variable[]
   values: Record<string, string>
   onChange: (vars: Variable[]) => void
   onValuesChange: (values: Record<string, string>) => void
+  printRows: Record<string, string>[]
+  activePrintRow: number
+  onPrintRowsChange: (rows: Record<string, string>[]) => void
+  onActivePrintRowChange: (index: number) => void
 }
 
 const TYPE_COLORS: Record<Variable['type'], string> = {
@@ -17,9 +22,10 @@ const TYPE_COLORS: Record<Variable['type'], string> = {
   url: 'bg-green-600/30 text-green-300',
 }
 
-export function VariableList({ variables, values, onChange, onValuesChange }: VariableListProps) {
+export function VariableList({ variables, values, onChange, onValuesChange, printRows, activePrintRow, onPrintRowsChange, onActivePrintRowChange }: VariableListProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
+  const [showBatch, setShowBatch] = useState(false)
   const [editTarget, setEditTarget] = useState<Variable | null>(null)
 
   const [form, setForm] = useState<Variable>({ name: '', type: 'text', default: '' })
@@ -73,7 +79,19 @@ export function VariableList({ variables, values, onChange, onValuesChange }: Va
           Variables
           <span className="normal-case font-normal text-gray-600">({variables.length})</span>
         </button>
-        <Button variant="ghost" size="sm" onClick={openAdd}>+ Add</Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={openAdd}>+ Add</Button>
+          <button
+            onClick={() => setShowBatch((b) => !b)}
+            className={`text-xs px-2 py-1 rounded transition-colors border ${
+              showBatch
+                ? 'bg-blue-600/30 border-blue-500/50 text-blue-300'
+                : 'bg-transparent border-white/10 text-gray-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            Batch
+          </button>
+        </div>
       </div>
 
       {!collapsed && (
@@ -114,8 +132,8 @@ export function VariableList({ variables, values, onChange, onValuesChange }: Va
             </div>
           )}
 
-          {/* Preview values */}
-          {variables.length > 0 && (
+          {/* Preview values - only shown when not in batch mode */}
+          {variables.length > 0 && !showBatch && (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-gray-500 uppercase tracking-wider">Preview values</p>
               <div className="grid grid-cols-2 gap-2">
@@ -132,6 +150,20 @@ export function VariableList({ variables, values, onChange, onValuesChange }: Va
                   </label>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Batch print table */}
+          {showBatch && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Batch rows</p>
+              <PrintBatchTable
+                variables={variables}
+                rows={printRows}
+                activeRow={activePrintRow}
+                onRowsChange={onPrintRowsChange}
+                onActiveRowChange={onActivePrintRowChange}
+              />
             </div>
           )}
         </div>

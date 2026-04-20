@@ -4,6 +4,7 @@ import {
   useImperativeHandle,
   useRef,
   useCallback,
+  useMemo,
   useState,
   type ChangeEvent,
   type CSSProperties,
@@ -29,6 +30,7 @@ import {
   konvaStageToCanvas,
 } from '../../lib/canvas-utils'
 import { canvasTo1BitBitmap, rotateBitmap90CW } from '../../lib/label-renderer'
+import type { DitherAlgorithm, ImageDitherRegion } from '../../lib/label-renderer'
 import type { Tool } from './ToolSidebar'
 import type { AlignDirection } from './AlignPanel'
 import type { AlignDocDirection } from './DocAlignPanel'
@@ -93,6 +95,8 @@ export type NodeConfig =
       height: number
       rotation: number
       src: string
+      ditherAlgorithm?: DitherAlgorithm
+      ditherThreshold?: number
     }
   | {
       id: string
@@ -141,6 +145,7 @@ export interface LabelCanvasHandle {
   moveForward: (id: string) => void
   moveBackward: (id: string) => void
   triggerImageUpload: () => void
+  addImage: (src: string) => void
 }
 
 interface LabelCanvasProps {
@@ -331,7 +336,11 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     },
     ref
   ) {
-    const dims = getCanvasDims(template.label_size, labelSettings.orientation)
+    const STAGE_PAD = 80
+    const dims = useMemo(
+      () => getCanvasDims(template.label_size, labelSettings.orientation),
+      [template.label_size, labelSettings.orientation]
+    )
 
     const [zoom, setZoom] = useState(1)
 
@@ -340,9 +349,9 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     )
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
-    const [editingValue, setEditingValue] = useState('')
+    const [editingValue] = useState('')
     const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-    const [textareaStyle, setTextareaStyle] = useState<CSSProperties>({})
+    const [, setTextareaStyle] = useState<CSSProperties>({})
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const pendingImagePosRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -446,8 +455,19 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       })
       stage.batchDraw()
 
-      const srcCanvas = await konvaStageToCanvas(stage, w, h)
-      const { bitmap } = canvasTo1BitBitmap(srcCanvas, w, h)
+      const srcCanvas = await konvaStageToCanvas(stage, w, h, STAGE_PAD, STAGE_PAD)
+      const imageRegions: ImageDitherRegion[] = nodesRef.current
+        .filter((n) => n.type === 'image')
+        .map((n) => ({
+          x: n.x,
+          y: n.y,
+          w: (n as Extract<typeof n, { type: 'image' }>).width,
+          h: (n as Extract<typeof n, { type: 'image' }>).height,
+          algorithm: (n as Extract<typeof n, { type: 'image' }>).ditherAlgorithm ?? 'threshold',
+          threshold: (n as Extract<typeof n, { type: 'image' }>).ditherThreshold ?? 128,
+        }))
+        .filter((r) => r.algorithm !== 'threshold' || r.threshold !== 128)
+      const { bitmap } = canvasTo1BitBitmap(srcCanvas, w, h, imageRegions)
 
       // Restore
       restores.forEach(({ node, original }) => node.text(original))
@@ -579,6 +599,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const cancelEdit = useCallback(() => {
       setEditingNodeId(null)
     }, [])
+    void commitEdit
+    void cancelEdit
 
     useEffect(() => {
       if (!editingNodeId) return
@@ -1039,6 +1061,46 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         pendingImagePosRef.current = { x: Math.round(dims.w / 2), y: Math.round(dims.h / 2) }
         fileInputRef.current?.click()
       },
+      addImage(src: string) {
+        const ICON_SIZE = 60
+        const x = Math.round(dims.w / 2 - ICON_SIZE / 2)
+        const y = Math.round(dims.h / 2 - ICON_SIZE / 2)
+        fetch(src)
+          .then((r) => r.blob())
+          .then((blob) => {
+            const reader = new FileReader()
+            reader.onload = () => {
+              const result = reader.result
+              if (typeof result !== 'string') return
+              const img = new window.Image()
+              img.onload = () => {
+                const naturalW = img.naturalWidth || ICON_SIZE
+                const naturalH = img.naturalHeight || ICON_SIZE
+                const scale = Math.min(ICON_SIZE / naturalW, ICON_SIZE / naturalH)
+                const w = Math.max(1, Math.round(naturalW * scale))
+                const h = Math.max(1, Math.round(naturalH * scale))
+                const id = genId('image')
+                const newNode: NodeConfig = {
+                  id,
+                  type: 'image',
+                  x,
+                  y,
+                  width: w,
+                  height: h,
+                  rotation: 0,
+                  src: result,
+                }
+                setNodes((prev) => [...prev, newNode])
+                setSelectedIds([id])
+              }
+              img.src = result
+            }
+            reader.readAsDataURL(blob)
+          })
+          .catch(() => {
+            // swallow errors; nothing to surface here
+          })
+      },
     }))
 
     // Keyboard shortcuts: copy/paste/delete
@@ -1123,8 +1185,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         setSelectedIds([])
         return
       }
-      const x = pos.x
-      const y = pos.y
+      const x = pos.x - STAGE_PAD
+      const y = pos.y - STAGE_PAD
 
       if (tool === 'select') {
         setSelectedIds([])
@@ -1323,10 +1385,29 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       return () => el.removeEventListener('wheel', onWheel)
     }, [])
 
+    const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const file = e.dataTransfer.files?.[0]
+      if (!file) return
+      if (!file.type.startsWith('image/')) return
+      const stage = stageRef.current
+      if (!stage) return
+      const stageRect = stage.container().getBoundingClientRect()
+      const x = Math.max(0, Math.round((e.clientX - stageRect.left) / zoom) - STAGE_PAD)
+      const y = Math.max(0, Math.round((e.clientY - stageRect.top) / zoom) - STAGE_PAD)
+      const reader = new FileReader()
+      reader.onload = () => {
+        if (typeof reader.result === 'string') void addImageAt(x, y, reader.result)
+      }
+      reader.readAsDataURL(file)
+    }, [zoom, addImageAt])
+
     return (
       <div
         ref={containerRef}
         className="flex items-center justify-center flex-1 bg-[#1a1a1a] overflow-auto p-4"
+        onDrop={handleDrop}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
       >
         <input
           ref={fileInputRef}
@@ -1340,8 +1421,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           style={{ lineHeight: 0, transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.05s ease-out' }}
         >
           <Stage
-            width={dims.w}
-            height={dims.h}
+            width={dims.w + STAGE_PAD * 2}
+            height={dims.h + STAGE_PAD * 2}
             ref={stageRef}
             onMouseDown={handleStageMouseDown}
             onTouchStart={handleStageMouseDown}
@@ -1350,6 +1431,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           >
             <Layer
               ref={layerRef}
+              x={STAGE_PAD}
+              y={STAGE_PAD}
               clipFunc={(ctx) => {
                 const isRounded = labelSettings.cornerStyle === 'rounded'
                 const is30x30 = template.label_size === '30x30'
@@ -1570,6 +1653,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                 }
                 return null
               })}
+            </Layer>
+            <Layer x={STAGE_PAD} y={STAGE_PAD}>
               <Transformer
                 ref={transformerRef}
                 rotateEnabled={true}
@@ -1579,7 +1664,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                 }}
               />
             </Layer>
-            <Layer ref={guideLayerRef} listening={false} />
+            <Layer ref={guideLayerRef} x={STAGE_PAD} y={STAGE_PAD} listening={false} />
           </Stage>
         </div>
       </div>

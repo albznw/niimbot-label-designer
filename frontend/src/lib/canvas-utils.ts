@@ -9,9 +9,11 @@ export function applyVariables(text: string, vars: Record<string, string>): stri
 export async function konvaStageToCanvas(
   stage: Konva.Stage,
   w: number,
-  h: number
+  h: number,
+  offsetX = 0,
+  offsetY = 0
 ): Promise<HTMLCanvasElement> {
-  return stage.toCanvas({ width: w, height: h, pixelRatio: 1 }) as HTMLCanvasElement
+  return stage.toCanvas({ x: offsetX, y: offsetY, width: w, height: h, pixelRatio: 1 }) as HTMLCanvasElement
 }
 
 export async function generateQRDataURL(

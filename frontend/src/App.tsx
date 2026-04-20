@@ -12,6 +12,7 @@ import { LabelCanvas } from './components/designer/LabelCanvas'
 import type { LabelCanvasHandle, NodeConfig } from './components/designer/LabelCanvas'
 import { ToolSidebar } from './components/designer/ToolSidebar'
 import type { Tool } from './components/designer/ToolSidebar'
+import { IconModal } from './components/designer/IconModal'
 import { AlignPanel } from './components/designer/AlignPanel'
 import { DocAlignPanel } from './components/designer/DocAlignPanel'
 import type { AlignDocDirection } from './components/designer/DocAlignPanel'
@@ -33,6 +34,8 @@ export function App() {
 
   // Designer state
   const [variableValues, setVariableValues] = useState<Record<string, string>>({})
+  const [printRows, setPrintRows] = useState<Record<string, string>[]>([])
+  const [activePrintRow, setActivePrintRow] = useState(0)
   const [bitmap, setBitmap] = useState<Uint8Array | null>(null)
   const [bitmapDims, setBitmapDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
   const [selectedObject, setSelectedObject] = useState<NodeConfig | NodeConfig[] | null>(null)
@@ -55,6 +58,7 @@ export function App() {
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showLabelSettings, setShowLabelSettings] = useState(false)
+  const [showIconModal, setShowIconModal] = useState(false)
   const [printSuccess, setPrintSuccess] = useState<string | null>(null)
 
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
@@ -84,6 +88,8 @@ export function App() {
     setCanvasNodes([])
     setCanvasSelectedIds([])
     setLabelSettings(DEFAULT_LABEL_SETTINGS)
+    setPrintRows([])
+    setActivePrintRow(0)
     if (selectedTemplate) {
       const defaults: Record<string, string> = {}
       selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
@@ -92,6 +98,18 @@ export function App() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId])
+
+  // Sync variableValues from active print row when batch mode is active
+  useEffect(() => {
+    if (printRows.length === 0) return
+    const row = printRows[activePrintRow] ?? {}
+    const defaults: Record<string, string> = {}
+    if (selectedTemplate) {
+      selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
+    }
+    setVariableValues({ ...defaults, ...row })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePrintRow, printRows])
 
   const handleCreateTemplate = useCallback(async (
     name: string,
@@ -274,6 +292,19 @@ export function App() {
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [bitmap, bitmapDims, selectedTemplate, printerStatus, dims])
 
+  // Intercept 'icon' tool: open modal and revert tool to 'select'
+  useEffect(() => {
+    if (activeTool === 'icon') {
+      setShowIconModal(true)
+      setActiveTool('select')
+    }
+  }, [activeTool])
+
+  const handleIconSelect = useCallback((filename: string) => {
+    canvasRef.current?.addImage('/icons/' + filename)
+    setShowIconModal(false)
+  }, [])
+
   const hasSelection = selectedObject != null
   const multiSelected = Array.isArray(selectedObject) && selectedObject.length >= 2
 
@@ -419,6 +450,10 @@ export function App() {
                   values={variableValues}
                   onChange={handleVariablesChange}
                   onValuesChange={setVariableValues}
+                  printRows={printRows}
+                  activePrintRow={activePrintRow}
+                  onPrintRowsChange={setPrintRows}
+                  onActivePrintRowChange={setActivePrintRow}
                 />
               </div>
 
@@ -430,6 +465,8 @@ export function App() {
                   height={bitmapDims.h || dims.h}
                   labelSize={selectedTemplate.label_size}
                   orientation={labelSettings.orientation}
+                  printCount={printRows.length > 0 ? printRows.length : 1}
+                  activePrintRow={activePrintRow}
                 />
                 {editorMode === 'canvas' && (
                   <>
@@ -482,6 +519,13 @@ export function App() {
 
       {showHistory && (
         <PrintHistory onClose={() => setShowHistory(false)} />
+      )}
+
+      {showIconModal && (
+        <IconModal
+          onSelect={handleIconSelect}
+          onClose={() => setShowIconModal(false)}
+        />
       )}
 
       {showLabelSettings && (
