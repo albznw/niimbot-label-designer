@@ -7,6 +7,7 @@ import { defaultHtmlForSize } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
 import type { PrinterStatus, PrintOptions } from './lib/printer-client'
 import { bitmapToPngBase64 } from './lib/bitmap-utils'
+import { rotateBitmap90CCW } from './lib/label-renderer'
 import { TemplateDropdown } from './components/projects/TemplateDropdown'
 import { LabelCanvas } from './components/designer/LabelCanvas'
 import type { LabelCanvasHandle, NodeConfig } from './components/designer/LabelCanvas'
@@ -265,9 +266,19 @@ export function App() {
     const h = bitmapDims.h || dims.h
     const printerName = printerStatus.deviceName ?? 'Unknown'
 
+    let printBitmap = bitmap
+    let printW = w
+    let printH = h
+    if (selectedTemplate.label_size === '50x30' && labelSettings.orientation === 'portrait') {
+      const rotated = rotateBitmap90CCW(printBitmap, printW, printH)
+      printBitmap = rotated.bitmap
+      printW = rotated.w
+      printH = rotated.h
+    }
+
     let printError: string | undefined
     try {
-      await printerClient.print(bitmap, w, h, options)
+      await printerClient.print(printBitmap, printW, printH, options)
     } catch (e) {
       printError = e instanceof Error ? e.message : 'Print failed'
       throw e
@@ -478,7 +489,7 @@ export function App() {
                         nodes={canvasNodes}
                         selectedIds={canvasSelectedIds}
                         onSelect={(id) => canvasRef.current?.selectNode(id)}
-                        onReorder={() => { /* not used */ }}
+                        onReorder={(from, to) => canvasRef.current?.reorderNodes(from, to)}
                         onMoveToFront={(id) => canvasRef.current?.moveToFront(id)}
                         onMoveToBack={(id) => canvasRef.current?.moveToBack(id)}
                         onMoveForward={(id) => canvasRef.current?.moveForward(id)}

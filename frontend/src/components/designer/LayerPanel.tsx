@@ -1,3 +1,4 @@
+import { useState, useRef } from 'react'
 import Icon from '@mdi/react'
 import {
   mdiFormatText,
@@ -9,6 +10,7 @@ import {
   mdiBarcode,
   mdiChevronUp,
   mdiChevronDown,
+  mdiDragVertical,
 } from '@mdi/js'
 import type { NodeConfig } from './LabelCanvas'
 
@@ -63,11 +65,68 @@ export function LayerPanel({
   nodes,
   selectedIds,
   onSelect,
+  onReorder,
   onMoveForward,
   onMoveBackward,
 }: LayerPanelProps) {
   // Display in reverse order (last painted = topmost = first in list)
   const displayed = [...nodes].reverse()
+
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+  const [dropIndicator, setDropIndicator] = useState<{ index: number; position: 'top' | 'bottom' } | null>(null)
+  const dragCounter = useRef(0)
+
+  function handleDragStart(index: number) {
+    setDraggedIndex(index)
+    dragCounter.current = 0
+  }
+
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault()
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const midY = rect.top + rect.height / 2
+    const position: 'top' | 'bottom' = e.clientY < midY ? 'top' : 'bottom'
+    setDropIndicator({ index, position })
+  }
+
+  function handleDragLeave() {
+    dragCounter.current--
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0
+      setDropIndicator(null)
+    }
+  }
+
+  function handleDragEnter() {
+    dragCounter.current++
+  }
+
+  function handleDrop(e: React.DragEvent, targetIndex: number) {
+    e.preventDefault()
+    if (draggedIndex === null) return
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const midY = rect.top + rect.height / 2
+    const position: 'top' | 'bottom' = e.clientY < midY ? 'top' : 'bottom'
+
+    let toIndex = position === 'top' ? targetIndex : targetIndex + 1
+    // Adjust for the removal of the dragged item
+    if (draggedIndex < toIndex) toIndex--
+
+    if (toIndex !== draggedIndex) {
+      onReorder(draggedIndex, toIndex)
+    }
+
+    setDraggedIndex(null)
+    setDropIndicator(null)
+    dragCounter.current = 0
+  }
+
+  function handleDragEnd() {
+    setDraggedIndex(null)
+    setDropIndicator(null)
+    dragCounter.current = 0
+  }
 
   return (
     <div className="flex flex-col gap-2 p-4 border-t border-white/10">
@@ -76,18 +135,35 @@ export function LayerPanel({
         <p className="text-xs text-gray-500">No elements yet</p>
       ) : (
         <div className="flex flex-col gap-1">
-          {displayed.map((node) => {
+          {displayed.map((node, index) => {
             const isSelected = selectedIds.includes(node.id)
+            const isDragging = draggedIndex === index
+            const indicator = dropIndicator?.index === index ? dropIndicator.position : null
+
             return (
               <div
                 key={node.id}
-                className={`flex items-center gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
-                  isSelected
+                draggable
+                onDragStart={() => handleDragStart(index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, index)}
+                onDragEnd={handleDragEnd}
+                className={`flex items-center gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors select-none
+                  ${isSelected
                     ? 'border-accent bg-accent/20 text-white'
                     : 'border-white/10 bg-[#1a1a1a] text-gray-300 hover:border-white/30'
-                }`}
+                  }
+                  ${isDragging ? 'opacity-40' : ''}
+                  ${indicator === 'top' ? 'border-t-2 border-t-blue-400' : ''}
+                  ${indicator === 'bottom' ? 'border-b-2 border-b-blue-400' : ''}
+                `}
                 onClick={() => onSelect(node.id)}
               >
+                <span className="text-gray-500 hover:text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0">
+                  <Icon path={mdiDragVertical} size={0.6} />
+                </span>
                 <Icon path={iconForNode(node)} size={0.6} />
                 <span className="text-xs flex-1 truncate">{labelForNode(node)}</span>
                 <button

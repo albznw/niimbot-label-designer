@@ -29,7 +29,7 @@ import {
   generateBarcodeDataURLAsync,
   konvaStageToCanvas,
 } from '../../lib/canvas-utils'
-import { canvasTo1BitBitmap, rotateBitmap90CW } from '../../lib/label-renderer'
+import { canvasTo1BitBitmap } from '../../lib/label-renderer'
 import type { DitherAlgorithm, ImageDitherRegion } from '../../lib/label-renderer'
 import type { Tool } from './ToolSidebar'
 import type { AlignDirection } from './AlignPanel'
@@ -144,6 +144,7 @@ export interface LabelCanvasHandle {
   moveToBack: (id: string) => void
   moveForward: (id: string) => void
   moveBackward: (id: string) => void
+  reorderNodes: (fromDisplayed: number, toDisplayed: number) => void
   triggerImageUpload: () => void
   addImage: (src: string) => void
 }
@@ -500,21 +501,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       }
       stage.batchDraw()
 
-      // Rotate bitmap 90° CW for portrait 50x30 so printer always gets 400x240
-      let finalBitmap = bitmap
-      let finalW = w
-      let finalH = h
-      if (
-        template.label_size === '50x30' &&
-        labelSettings.orientation === 'portrait'
-      ) {
-        const rotated = rotateBitmap90CW(bitmap, w, h)
-        finalBitmap = rotated.bitmap
-        finalW = rotated.w
-        finalH = rotated.h
-      }
-
-      onBitmapUpdateRef.current(finalBitmap, finalW, finalH)
+      onBitmapUpdateRef.current(bitmap, w, h)
     }, [dims, template.label_size, labelSettings.orientation])
 
     const scheduleUpdate = useCallback(() => {
@@ -1086,6 +1073,17 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       },
       moveBackward(id: string) {
         moveBackwardInternal(id)
+      },
+      reorderNodes(fromDisplayed: number, toDisplayed: number) {
+        const len = nodesRef.current.length
+        const from = len - 1 - fromDisplayed
+        const to = len - 1 - toDisplayed
+        setNodes((prev) => {
+          const next = [...prev]
+          const [item] = next.splice(from, 1)
+          next.splice(to, 0, item)
+          return next
+        })
       },
       triggerImageUpload() {
         pendingImagePosRef.current = { x: Math.round(dims.w / 2), y: Math.round(dims.h / 2) }
