@@ -32,7 +32,7 @@ import {
 import { canvasTo1BitBitmap } from '../../lib/label-renderer'
 import type { DitherAlgorithm, ImageDitherRegion } from '../../lib/label-renderer'
 import type { Tool } from './ToolSidebar'
-import type { AlignDirection } from './AlignPanel'
+import type { AlignDirection, DistributeDirection } from './AlignPanel'
 import type { AlignDocDirection } from './DocAlignPanel'
 
 export type NodeConfig =
@@ -133,6 +133,7 @@ export interface LabelCanvasHandle {
   copySelected: () => void
   pasteSelected: () => void
   alignSelected: (direction: AlignDirection) => void
+  distributeSelected: (direction: DistributeDirection) => void
   alignToDocument: (direction: AlignDocDirection) => void
   getSelectedObject: () => NodeConfig | NodeConfig[] | null
   getCanvas: () => Konva.Stage | null
@@ -362,6 +363,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const transformerRef = useRef<Konva.Transformer | null>(null)
     const nodeRefs = useRef<Map<string, Konva.Node>>(new Map())
     const copiedNodesRef = useRef<NodeConfig[]>([])
+    const activeDragIdRef = useRef<string | null>(null)
 
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const historyRef = useRef<NodeConfig[][]>([])
@@ -475,9 +477,24 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           t.text(substituted)
         }
       })
+      // Disable rounded corners so bitmap has no black corner pixels
+      const layer = layerRef.current
+      const savedClipFn = layer?.getAttr('clipFunc') as ((ctx: CanvasRenderingContext2D) => void) | undefined
+      if (layer) {
+        layer.setAttr('clipFunc', (ctx: CanvasRenderingContext2D) => { ctx.rect(0, 0, dims.w, dims.h) })
+      }
+      const bgRect = stage.findOne('.bg') as Konva.Rect | null
+      const savedRadius = bgRect?.cornerRadius()
+      bgRect?.cornerRadius(0)
+
       stage.batchDraw()
 
       const srcCanvas = await konvaStageToCanvas(stage, w, h, STAGE_PAD, STAGE_PAD)
+
+      // Restore rounded corners
+      if (layer) layer.setAttr('clipFunc', savedClipFn)
+      if (bgRect && savedRadius !== undefined) bgRect.cornerRadius(savedRadius as number)
+
       const imageRegions: ImageDitherRegion[] = nodesRef.current
         .filter((n) => n.type === 'image')
         .map((n) => ({
@@ -958,6 +975,49 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       scheduleUpdate()
     }, [dims, scheduleUpdate])
 
+    const distributeSelectedInternal = useCallback((direction: DistributeDirection) => {
+      const ids = selectedIdsRef.current
+      if (ids.length < 3) return
+      const targets = nodesRef.current.filter((n) => ids.includes(n.id))
+      if (targets.length < 3) return
+
+      const bboxes = targets.map((n) => ({ node: n, bbox: getNodeBBox(n) }))
+
+      if (direction === 'horizontal') {
+        bboxes.sort((a, b) => a.bbox.x - b.bbox.x)
+        const leftmost = bboxes[0].bbox.x
+        const totalWidth = bboxes.reduce((sum, b) => sum + b.bbox.width, 0)
+        const rightmost = bboxes[bboxes.length - 1].bbox.x + bboxes[bboxes.length - 1].bbox.width
+        const gap = (rightmost - leftmost - totalWidth) / (bboxes.length - 1)
+        const positions = new Map<string, number>()
+        let curX = leftmost
+        bboxes.forEach((b) => { positions.set(b.node.id, curX); curX += b.bbox.width + gap })
+        setNodes((prev) =>
+          prev.map((n) => {
+            const newX = positions.get(n.id)
+            if (newX === undefined) return n
+            return { ...n, ...setNodeX(n, newX) } as NodeConfig
+          })
+        )
+      } else {
+        bboxes.sort((a, b) => a.bbox.y - b.bbox.y)
+        const topmost = bboxes[0].bbox.y
+        const totalHeight = bboxes.reduce((sum, b) => sum + b.bbox.height, 0)
+        const bottommost = bboxes[bboxes.length - 1].bbox.y + bboxes[bboxes.length - 1].bbox.height
+        const gap = (bottommost - topmost - totalHeight) / (bboxes.length - 1)
+        const positions = new Map<string, number>()
+        let curY = topmost
+        bboxes.forEach((b) => { positions.set(b.node.id, curY); curY += b.bbox.height + gap })
+        setNodes((prev) =>
+          prev.map((n) => {
+            const newY = positions.get(n.id)
+            if (newY === undefined) return n
+            return { ...n, ...setNodeY(n, newY) } as NodeConfig
+          })
+        )
+      }
+    }, [])
+
     const moveToFrontInternal = useCallback((id: string) => {
       setNodes((prev) => {
         const idx = prev.findIndex((n) => n.id === id)
@@ -1034,6 +1094,9 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       },
       alignSelected(direction: AlignDirection) {
         alignSelectedInternal(direction)
+      },
+      distributeSelected(direction: DistributeDirection) {
+        distributeSelectedInternal(direction)
       },
       alignToDocument(direction: AlignDocDirection) {
         alignToDocumentInternal(direction)
@@ -1322,6 +1385,14 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       gl.batchDraw()
     }, [])
 
+    const handleStageDragStart = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+      const dragged = e.target
+      if (dragged === stageRef.current) return
+      if (dragged.getClassName() === 'Transformer') return
+      const id = dragged.id()
+      if (id) activeDragIdRef.current = id
+    }, [])
+
     const drawGuide = useCallback((orientation: 'v' | 'h', pos: number) => {
       const gl = guideLayerRef.current
       if (!gl) return
@@ -1367,20 +1438,49 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         const gl = guideLayerRef.current
         if (!gl) return
         const dragged = e.target
-        // Ignore stage-level drags (shouldn't happen but guard)
         if (dragged === stageRef.current) return
-        // Ignore transformer
         if (dragged.getClassName() === 'Transformer') return
 
         const draggedId = dragged.id()
         if (!draggedId) return
 
-        const snap = getSnapPointsForKonva(dragged)
-        // Build guide source points from other nodes and canvas
+        const ids = selectedIdsRef.current
+        const isGroupDrag = ids.includes(draggedId) && ids.length > 1
+
+        // Followers in a group drag skip snap — leader handles all movement
+        if (isGroupDrag && draggedId !== activeDragIdRef.current) {
+          return
+        }
+
+        let snap: { vertical: number[]; horizontal: number[] }
+
+        if (isGroupDrag) {
+          // Compute combined bounding box of all selected nodes
+          let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity
+          ids.forEach((id) => {
+            const k = id === draggedId ? dragged : nodeRefs.current.get(id)
+            if (!k) return
+            try {
+              const rect = (k as Konva.Shape).getClientRect({ skipTransform: false })
+              const rx = rect.x - STAGE_PAD
+              const ry = rect.y - STAGE_PAD
+              gMinX = Math.min(gMinX, rx); gMinY = Math.min(gMinY, ry)
+              gMaxX = Math.max(gMaxX, rx + rect.width); gMaxY = Math.max(gMaxY, ry + rect.height)
+            } catch { /* skip nodes with no valid rect */ }
+          })
+          snap = {
+            vertical: [gMinX, (gMinX + gMaxX) / 2, gMaxX],
+            horizontal: [gMinY, (gMinY + gMaxY) / 2, gMaxY],
+          }
+        } else {
+          snap = getSnapPointsForKonva(dragged)
+        }
+
+        // Build guide source points from non-selected nodes and canvas edges
         const vSources: number[] = [0, dims.w / 2, dims.w]
         const hSources: number[] = [0, dims.h / 2, dims.h]
         nodesRef.current.forEach((n) => {
-          if (n.id === draggedId) return
+          if (ids.includes(n.id)) return
           const k = nodeRefs.current.get(n.id)
           if (!k) return
           const snaps = getSnapPointsForKonva(k)
@@ -1398,9 +1498,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             const d = src - pt
             const ad = Math.abs(d)
             if (ad <= SNAP_THRESHOLD && ad < bestVAbs) {
-              bestVAbs = ad
-              bestVDelta = d
-              bestVGuideLine = src
+              bestVAbs = ad; bestVDelta = d; bestVGuideLine = src
             }
           })
         })
@@ -1413,9 +1511,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             const d = src - pt
             const ad = Math.abs(d)
             if (ad <= SNAP_THRESHOLD && ad < bestHAbs) {
-              bestHAbs = ad
-              bestHDelta = d
-              bestHGuideLine = src
+              bestHAbs = ad; bestHDelta = d; bestHGuideLine = src
             }
           })
         })
@@ -1428,13 +1524,38 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           dragged.y(dragged.y() + bestHDelta)
           drawGuide('h', bestHGuideLine)
         }
+
+        // Apply snap delta to all other group members so they stay aligned
+        if (isGroupDrag && (bestVGuideLine != null || bestHGuideLine != null)) {
+          ids.forEach((id) => {
+            if (id === draggedId) return
+            const k = nodeRefs.current.get(id)
+            if (!k) return
+            if (bestVGuideLine != null) k.x(k.x() + bestVDelta)
+            if (bestHGuideLine != null) k.y(k.y() + bestHDelta)
+          })
+        }
+
         gl.batchDraw()
       },
       [dims.h, dims.w, drawGuide]
     )
 
     const handleStageDragEnd = useCallback(() => {
+      activeDragIdRef.current = null
       clearGuides()
+      // Sync all selected nodes' Konva positions back to state (covers followers moved programmatically)
+      const ids = selectedIdsRef.current
+      if (ids.length > 1) {
+        setNodes((prev) =>
+          prev.map((n) => {
+            if (!ids.includes(n.id)) return n
+            const k = nodeRefs.current.get(n.id)
+            if (!k) return n
+            return { ...n, x: k.x(), y: k.y() } as NodeConfig
+          })
+        )
+      }
     }, [clearGuides])
 
     const containerRef = useRef<HTMLDivElement>(null)
@@ -1491,6 +1612,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             ref={stageRef}
             onMouseDown={handleStageMouseDown}
             onTouchStart={handleStageMouseDown}
+            onDragStart={handleStageDragStart}
             onDragMove={handleStageDragMove}
             onDragEnd={handleStageDragEnd}
           >
@@ -1553,7 +1675,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       fontStyle={node.fontStyle}
                       fontFamily={node.fontFamily}
                       align={node.align}
-                      fill={node.fill}
+                      fill={Object.keys(variableValues).some(name => node.text.includes('{{' + name + '}}')) ? '#6b8e23' : node.fill}
                       draggable
                       visible={editingNodeId !== node.id}
                       onClick={(e) => handleSelectNode(node.id, e)}

@@ -48,6 +48,7 @@ export function App() {
   const [canvasNodes, setCanvasNodes] = useState<NodeConfig[]>([])
   const [canvasSelectedIds, setCanvasSelectedIds] = useState<string[]>([])
   const [labelSettings, setLabelSettings] = useState<LabelDisplaySettings>(DEFAULT_LABEL_SETTINGS)
+  const [varPaneOpen, setVarPaneOpen] = useState(true)
 
   // Printer state
   const [printerStatus, setPrinterStatus] = useState<PrinterStatus>({
@@ -71,8 +72,11 @@ export function App() {
 
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const varSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const textSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const selectedTemplateIdRef = useRef(selectedTemplateId)
   useEffect(() => { selectedTemplateIdRef.current = selectedTemplateId }, [selectedTemplateId])
+  const bitmapResolverRef = useRef<((bmp: Uint8Array, w: number, h: number) => void) | null>(null)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -161,26 +165,20 @@ export function App() {
     setCanvasNodes([])
     setCanvasSelectedIds([])
     setLabelSettings(DEFAULT_LABEL_SETTINGS)
-    setPrintRows([])
+    const rows = selectedTemplate?.print_rows ?? []
+    setPrintRows(rows)
     setActivePrintRow(0)
+    setVariableValues(rows[0] ?? {})
     if (selectedTemplate) {
-      const defaults: Record<string, string> = {}
-      selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
-      setVariableValues(defaults)
       setEditorMode(selectedTemplate.mode ?? 'canvas')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId])
 
-  // Sync variableValues from active print row when batch mode is active
+  // Sync variableValues from active print row
   useEffect(() => {
-    if (printRows.length === 0) return
-    const row = printRows[activePrintRow] ?? {}
-    const defaults: Record<string, string> = {}
-    if (selectedTemplate) {
-      selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
-    }
-    setVariableValues({ ...defaults, ...row })
+    const row = printRows[activePrintRow] ?? printRows[0] ?? {}
+    setVariableValues(row)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePrintRow, printRows])
 
@@ -208,6 +206,12 @@ export function App() {
     setTemplates((prev) => prev.filter((t) => t.id !== id))
     if (selectedTemplateId === id) setSelectedTemplateId(null)
   }, [selectedTemplateId])
+
+  const handleRenameTemplate = useCallback(async (id: string, name: string) => {
+    setTemplates((prev) => prev.map((t) => t.id === id ? { ...t, name } : t))
+    await db.updateTemplate(id, { name })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to rename'))
+  }, [])
 
   const handleCanvasChange = useCallback((json: string) => {
     if (!selectedTemplateId) return
@@ -240,6 +244,10 @@ export function App() {
   const handleBitmapUpdate = useCallback((bmp: Uint8Array, w: number, h: number) => {
     setBitmap(bmp)
     setBitmapDims({ w, h })
+    if (bitmapResolverRef.current) {
+      bitmapResolverRef.current(bmp, w, h)
+      bitmapResolverRef.current = null
+    }
   }, [])
 
   const handleSelectionChange = useCallback((objs: NodeConfig[]) => {
@@ -253,17 +261,45 @@ export function App() {
     setCanvasSelectedIds(objs.map((o) => o.id))
   }, [])
 
+  const pendingVarData = useRef<{ variables?: Variable[]; print_rows?: Record<string, string>[]; variable_text?: string }>({})
+
+  const flushVarSave = useCallback((id: string) => {
+    if (varSaveDebounceRef.current) clearTimeout(varSaveDebounceRef.current)
+    varSaveDebounceRef.current = setTimeout(() => {
+      const patch = pendingVarData.current
+      pendingVarData.current = {}
+      db.updateTemplate(id, patch)
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
+    }, 500)
+  }, [])
+
   const handleVariablesChange = useCallback((vars: Variable[]) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, variables: vars } : t)
     )
-    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
-    saveDebounceRef.current = setTimeout(() => {
-      db.updateTemplate(selectedTemplateId, { variables: vars })
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
-    }, 500)
-  }, [selectedTemplateId])
+    pendingVarData.current.variables = vars
+    flushVarSave(selectedTemplateId)
+  }, [selectedTemplateId, flushVarSave])
+
+  const handleVariableTextChange = useCallback((text: string) => {
+    if (!selectedTemplateId) return
+    setTemplates((prev) =>
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, variable_text: text } : t)
+    )
+    pendingVarData.current.variable_text = text
+    flushVarSave(selectedTemplateId)
+  }, [selectedTemplateId, flushVarSave])
+
+  const handlePrintRowsChange = useCallback((rows: Record<string, string>[]) => {
+    if (!selectedTemplateId) return
+    setPrintRows(rows)
+    setTemplates((prev) =>
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, print_rows: rows } : t)
+    )
+    pendingVarData.current.print_rows = rows
+    flushVarSave(selectedTemplateId)
+  }, [selectedTemplateId, flushVarSave])
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
   const dims = selectedTemplate
@@ -361,6 +397,62 @@ export function App() {
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [bitmap, bitmapDims, selectedTemplate, printerStatus, dims])
 
+  const handleBatchPrint = useCallback(async (
+    rows: Record<string, string>[],
+    options: PrintOptions
+  ) => {
+    if (!selectedTemplate) return
+    const w = bitmapDims.w || dims.w
+    const h = bitmapDims.h || dims.h
+    const printerName = printerStatus.deviceName ?? 'Unknown'
+
+    for (const row of rows) {
+      const values = row
+
+      setVariableValues(values)
+
+      const { bmp, bw, bh } = await new Promise<{ bmp: Uint8Array; bw: number; bh: number }>((resolve) => {
+        bitmapResolverRef.current = (b, bw, bh) => resolve({ bmp: b, bw, bh })
+        setTimeout(() => {
+          if (bitmapResolverRef.current) {
+            bitmapResolverRef.current = null
+            resolve({ bmp: bitmap!, bw: w, bh: h })
+          }
+        }, 500)
+      })
+
+      try {
+        await printerClient.print(bmp, bw, bh, { ...options, quantity: 1 })
+        await db.savePrintJob({
+          template_id: selectedTemplate.id,
+          variables_used: values,
+          bitmap_png_b64: await bitmapToPngBase64(bmp, bw, bh),
+          printer_name: printerName,
+          printed_at: new Date().toISOString(),
+          success: true,
+          error: null,
+        })
+      } catch (e) {
+        try {
+          await db.savePrintJob({
+            template_id: selectedTemplate.id,
+            variables_used: values,
+            bitmap_png_b64: null,
+            printer_name: printerName,
+            printed_at: new Date().toISOString(),
+            success: false,
+            error: e instanceof Error ? e.message : 'Print failed',
+          })
+        } catch { /* non-fatal */ }
+        throw e
+      }
+    }
+
+    setShowPrintDialog(false)
+    setPrintSuccess(`Printed ${rows.length} labels on ${printerName}`)
+    setTimeout(() => setPrintSuccess(null), 4000)
+  }, [selectedTemplate, bitmapDims, dims, printerStatus, bitmap])
+
   // Intercept 'icon' tool: open modal and revert tool to 'select'
   useEffect(() => {
     if (activeTool === 'icon') {
@@ -389,6 +481,7 @@ export function App() {
           onSelectTemplate={setSelectedTemplateId}
           onCreate={handleCreateTemplate}
           onDelete={handleDeleteTemplate}
+          onRename={handleRenameTemplate}
           loading={loadingTemplates}
         />
         <div className="flex-1" />
@@ -508,16 +601,31 @@ export function App() {
                   />
                 )}
 
-                <VariableList
-                  variables={selectedTemplate.variables}
-                  values={variableValues}
-                  onChange={handleVariablesChange}
-                  onValuesChange={setVariableValues}
-                  printRows={printRows}
-                  activePrintRow={activePrintRow}
-                  onPrintRowsChange={setPrintRows}
-                  onActivePrintRowChange={setActivePrintRow}
-                />
+                {/* Variable pane */}
+                <div className="border-t border-white/10 shrink-0">
+                  <button
+                    onClick={() => setVarPaneOpen(v => !v)}
+                    className="w-full flex items-center gap-2 px-3 py-1 bg-[#222] hover:bg-[#2a2a2a] transition-colors text-xs text-gray-500"
+                  >
+                    <span>{varPaneOpen ? '▼' : '▶'}</span>
+                    <span>Variables</span>
+                  </button>
+                  {varPaneOpen && (
+                    <VariableList
+                      variables={selectedTemplate.variables}
+                      values={variableValues}
+                      onChange={handleVariablesChange}
+                      onValuesChange={setVariableValues}
+                      onTextChange={handleVariableTextChange}
+                      initialText={selectedTemplate.variable_text ?? ''}
+                      printRows={printRows}
+                      activePrintRow={activePrintRow}
+                      onPrintRowsChange={handlePrintRowsChange}
+                      onActivePrintRowChange={setActivePrintRow}
+                      syncKey={selectedTemplate.id}
+                    />
+                  )}
+                </div>
               </div>
 
               {/* Right sidebar */}
@@ -528,6 +636,7 @@ export function App() {
                   height={bitmapDims.h || dims.h}
                   labelSize={selectedTemplate.label_size}
                   orientation={labelSettings.orientation}
+                  cornerStyle={labelSettings.cornerStyle}
                   printCount={printRows.length > 0 ? printRows.length : 1}
                   activePrintRow={activePrintRow}
                 />
@@ -537,6 +646,7 @@ export function App() {
                       {multiSelected && (
                         <AlignPanel
                           onAlign={(dir) => canvasRef.current?.alignSelected(dir)}
+                          onDistribute={(dir) => canvasRef.current?.distributeSelected(dir)}
                         />
                       )}
                       <PropertiesPanel
@@ -575,7 +685,9 @@ export function App() {
           bitmapHeight={bitmapDims.h || dims.h}
           printerStatus={printerStatus}
           labelSettings={labelSettings}
+          printRows={printRows}
           onPrint={handlePrint}
+          onBatchPrint={handleBatchPrint}
           onClose={() => setShowPrintDialog(false)}
         />
       )}
@@ -601,6 +713,7 @@ export function App() {
               density={labelSettings.density}
               cornerStyle={labelSettings.cornerStyle}
               orientation={labelSettings.orientation}
+                  cornerStyle={labelSettings.cornerStyle}
               labelSize={selectedTemplate?.label_size ?? '50x30'}
               onLabelSizeChange={handleLabelSizeChange}
               onChange={(s) => setLabelSettings((prev) => ({ ...prev, ...s }))}

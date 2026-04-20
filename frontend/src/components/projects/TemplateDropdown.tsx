@@ -12,6 +12,7 @@ interface TemplateDropdownProps {
   onSelectTemplate: (id: string) => void
   onCreate: (name: string, labelSize: LabelSize, mode: 'canvas' | 'html') => Promise<void>
   onDelete: (id: string) => Promise<void>
+  onRename: (id: string, name: string) => Promise<void>
   loading: boolean
 }
 
@@ -31,6 +32,7 @@ export function TemplateDropdown({
   onSelectTemplate,
   onCreate,
   onDelete,
+  onRename,
   loading,
 }: TemplateDropdownProps) {
   const [open, setOpen] = useState(false)
@@ -40,6 +42,8 @@ export function TemplateDropdown({
   const [newMode, setNewMode] = useState<'canvas' | 'html'>('canvas')
   const [saving, setSaving] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -76,20 +80,19 @@ export function TemplateDropdown({
     setConfirmDeleteId(null)
   }
 
+  const handleRename = async () => {
+    if (!renamingId || !renameValue.trim()) return
+    await onRename(renamingId, renameValue.trim())
+    setRenamingId(null)
+    setRenameValue('')
+  }
+
   const confirmTarget = templates.find((t) => t.id === confirmDeleteId)
+  const renameTarget = templates.find((t) => t.id === renamingId)
 
   return (
     <>
       <div ref={containerRef} className="relative flex items-center gap-2">
-        {selectedTemplate && (
-          <button
-            className="text-xs font-mono text-gray-500 hover:text-gray-300 transition-colors select-all"
-            title="Click to copy ID"
-            onClick={() => navigator.clipboard.writeText(selectedTemplate.id)}
-          >
-            {selectedTemplate.id}
-          </button>
-        )}
         <button
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2 text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10 max-w-[220px]"
@@ -99,6 +102,15 @@ export function TemplateDropdown({
           </span>
           <span className="shrink-0 text-gray-400">▾</span>
         </button>
+        {selectedTemplate && (
+          <button
+            className="text-xs font-mono text-gray-500 hover:text-gray-300 transition-colors select-all"
+            title="Click to copy ID"
+            onClick={() => navigator.clipboard.writeText(selectedTemplate.id)}
+          >
+            {selectedTemplate.id}
+          </button>
+        )}
 
         {open && (
           <div className="absolute top-full left-0 mt-1 z-50 min-w-[240px] bg-[#2a2a2a] border border-white/10 rounded-lg shadow-2xl overflow-hidden">
@@ -137,17 +149,31 @@ export function TemplateDropdown({
                           </div>
                           <span className="text-xs font-mono text-gray-600">{template.id}</span>
                         </div>
-                        <button
-                          className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all text-lg leading-none ml-2 shrink-0"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setConfirmDeleteId(template.id)
-                            setOpen(false)
-                          }}
-                          title="Delete template"
-                        >
-                          ×
-                        </button>
+                        <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 ml-2 shrink-0 transition-all">
+                          <button
+                            className="text-gray-500 hover:text-blue-400 transition-colors text-xs px-1"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setRenamingId(template.id)
+                              setRenameValue(template.name)
+                              setOpen(false)
+                            }}
+                            title="Rename template"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="text-gray-500 hover:text-red-400 transition-colors text-lg leading-none"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmDeleteId(template.id)
+                              setOpen(false)
+                            }}
+                            title="Delete template"
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -244,6 +270,29 @@ export function TemplateDropdown({
               </Button>
               <Button variant="danger" onClick={() => handleDelete(confirmTarget.id)}>
                 Delete
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {renameTarget && (
+        <Modal title="Rename Template" onClose={() => { setRenamingId(null); setRenameValue('') }}>
+          <div className="flex flex-col gap-4">
+            <Input
+              id="rename-template"
+              label="Template name"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleRename() }}
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" onClick={() => { setRenamingId(null); setRenameValue('') }}>
+                Cancel
+              </Button>
+              <Button onClick={() => void handleRename()} disabled={!renameValue.trim()}>
+                Rename
               </Button>
             </div>
           </div>
