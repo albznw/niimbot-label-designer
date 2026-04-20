@@ -366,6 +366,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const historyRef = useRef<NodeConfig[][]>([])
     const historyIndexRef = useRef(-1)
     const isUndoRedoRef = useRef(false)
+    const skipHistoryRef = useRef(false)
     const nodesRef = useRef(nodes)
     const selectedIdsRef = useRef(selectedIds)
     const activeToolRef = useRef(activeTool)
@@ -381,6 +382,10 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     useEffect(() => {
       if (isUndoRedoRef.current) {
         isUndoRedoRef.current = false
+        return
+      }
+      if (skipHistoryRef.current) {
+        skipHistoryRef.current = false
         return
       }
       historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1)
@@ -542,12 +547,14 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           const resolved = applyVariables((n as { content?: string }).content ?? '', variableValues)
           if (n.type === 'qr') {
             generateQRDataURL(resolved, n.width, n.errorCorrectionLevel).then((src) => {
+              skipHistoryRef.current = true
               setNodes((prev) =>
                 prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
               )
             })
           } else {
             generateBarcodeDataURLAsync(resolved, n.width, n.height).then((src) => {
+              skipHistoryRef.current = true
               setNodes((prev) =>
                 prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
               )
@@ -592,12 +599,14 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         const ecl = ('errorCorrectionLevel' in patch ? (patch as { errorCorrectionLevel: 'L'|'M'|'Q'|'H' }).errorCorrectionLevel : null) ?? (node.type === 'qr' ? node.errorCorrectionLevel : undefined)
         if (node.type === 'qr') {
           generateQRDataURL(newContent, node.width, ecl).then((src) => {
+            skipHistoryRef.current = true
             setNodes((prev) =>
               prev.map((n) => (n.id === id ? ({ ...n, src } as NodeConfig) : n))
             )
           })
         } else if (node.type === 'barcode') {
           generateBarcodeDataURLAsync(newContent, node.width, node.height).then((src) => {
+            skipHistoryRef.current = true
             setNodes((prev) =>
               prev.map((n) => (n.id === id ? ({ ...n, src } as NodeConfig) : n))
             )
