@@ -32,6 +32,8 @@ interface ObjState {
   // circle
   radiusX: number
   radiusY: number
+  // qr / barcode
+  content: string
 }
 
 function parseFontStyle(style: string): { bold: boolean; italic: boolean } {
@@ -67,6 +69,7 @@ function readState(node: NodeConfig | null): ObjState {
     strokeWidth: 1,
     radiusX: 0,
     radiusY: 0,
+    content: '',
   }
   if (!node) return defaults
 
@@ -120,6 +123,15 @@ function readState(node: NodeConfig | null): ObjState {
       ...base,
       stroke: String(node.stroke ?? '#000000'),
       strokeWidth: node.strokeWidth ?? 1,
+    }
+  }
+
+  if (node.type === 'qr' || node.type === 'barcode') {
+    return {
+      ...base,
+      width: Math.round(node.width ?? 0),
+      height: Math.round(node.height ?? 0),
+      content: node.content ?? '',
     }
   }
 
@@ -220,6 +232,12 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
         nodePatch.height = next.height
       }
 
+      if (single.type === 'qr' || single.type === 'barcode') {
+        nodePatch.width = next.width
+        nodePatch.height = next.height
+        nodePatch.content = next.content
+      }
+
       onUpdate(nodePatch as Partial<NodeConfig>)
     },
     [single, onUpdate, state]
@@ -253,6 +271,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
   const isRectObj = node.type === 'rect'
   const isCircle = node.type === 'circle'
   const isLine = node.type === 'line'
+  const isQR = node.type === 'qr'
+  const isBarcode = node.type === 'barcode'
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -348,6 +368,23 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               </button>
             ))}
           </div>
+        </section>
+      )}
+
+      {(isQR || isBarcode) && (
+        <section className="flex flex-col gap-3">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">
+            {isQR ? 'QR Code' : 'Barcode'}
+          </p>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Content</span>
+            <textarea
+              className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1.5 text-xs text-white resize-none focus:outline-none focus:border-accent"
+              rows={3}
+              value={state.content}
+              onChange={(e) => apply({ content: e.target.value })}
+            />
+          </label>
         </section>
       )}
 

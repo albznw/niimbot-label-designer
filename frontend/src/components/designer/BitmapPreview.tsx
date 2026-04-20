@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { LabelSize } from '../../types/label'
+import type { LabelOrientation, LabelSize } from '../../types/label'
 import { bitmapToImageData } from '../../lib/label-renderer'
 
 interface BitmapPreviewProps {
@@ -7,12 +7,19 @@ interface BitmapPreviewProps {
   width: number
   height: number
   labelSize: LabelSize
+  orientation?: LabelOrientation
 }
 
 const MAX_W = 400
 const MAX_H = 300
 
-export function BitmapPreview({ bitmap, width, height, labelSize }: BitmapPreviewProps) {
+export function BitmapPreview({
+  bitmap,
+  width,
+  height,
+  labelSize,
+  orientation = 'landscape',
+}: BitmapPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   const scale = Math.min(MAX_W / width, MAX_H / height, 1)
@@ -32,7 +39,38 @@ export function BitmapPreview({ bitmap, width, height, labelSize }: BitmapPrevie
     tmp.getContext('2d')!.putImageData(imageData, 0, 0)
     ctx.clearRect(0, 0, displayW, displayH)
     ctx.drawImage(tmp, 0, 0, displayW, displayH)
-  }, [bitmap, width, height, displayW, displayH])
+
+    // 30x30 split line: dashed horizontal line across middle (two 30x15 halves)
+    if (labelSize === '30x30') {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)'
+      ctx.setLineDash([6, 4])
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, Math.round(displayH / 2))
+      ctx.lineTo(displayW, Math.round(displayH / 2))
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // Feed indicator line
+    ctx.save()
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
+    ctx.lineWidth = 3
+    ctx.setLineDash([])
+    ctx.beginPath()
+    if (labelSize === '50x30' && orientation === 'portrait') {
+      // Portrait 50x30: design top rotates to right edge after 90° CW
+      ctx.moveTo(displayW - 1.5, 0)
+      ctx.lineTo(displayW - 1.5, displayH)
+    } else {
+      // Landscape 50x30 and 30x30: printhead starts at top
+      ctx.moveTo(0, 1.5)
+      ctx.lineTo(displayW, 1.5)
+    }
+    ctx.stroke()
+    ctx.restore()
+  }, [bitmap, width, height, displayW, displayH, labelSize, orientation])
 
   return (
     <div className="flex flex-col gap-2 p-4 bg-[#2a2a2a] border-t border-white/10">

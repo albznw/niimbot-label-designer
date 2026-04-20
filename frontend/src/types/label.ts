@@ -12,3 +12,31 @@ export const LABEL_SIZE_LABELS: Record<LabelSize, string> = {
   '30x50': '30x50mm',
   '30x30': '30x30mm',
 }
+
+export type LabelOrientation = 'landscape' | 'portrait'
+export type LabelCornerStyle = 'rect' | 'rounded'
+
+export interface LabelDisplaySettings {
+  labelType: number
+  density: number
+  cornerStyle: LabelCornerStyle
+  orientation: LabelOrientation
+}
+
+export const DEFAULT_LABEL_SETTINGS: LabelDisplaySettings = {
+  labelType: 1,
+  density: 3,
+  cornerStyle: 'rect',
+  orientation: 'landscape',
+}
+
+export function getCanvasDims(
+  labelSize: LabelSize,
+  orientation: LabelOrientation
+): { w: number; h: number } {
+  const base = LABEL_DIMS[labelSize]
+  if (labelSize === '50x30' && orientation === 'portrait') {
+    return { w: base.h, h: base.w }
+  }
+  return base
+}

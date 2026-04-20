@@ -33,9 +33,11 @@ function iconForNode(node: NodeConfig): string {
       return mdiCircleOutline
     case 'line':
       return mdiVectorLine
+    case 'qr':
+      return mdiQrcode
+    case 'barcode':
+      return mdiBarcode
     case 'image':
-      if (node.id.startsWith('qr')) return mdiQrcode
-      if (node.id.startsWith('barcode')) return mdiBarcode
       return mdiImage
     default:
       return mdiImage
@@ -48,11 +50,9 @@ function labelForNode(node: NodeConfig): string {
     if (t.length === 0) return 'Text'
     return t.length > 20 ? `${t.slice(0, 20)}…` : t
   }
-  if (node.type === 'image') {
-    if (node.id.startsWith('qr')) return 'QR code'
-    if (node.id.startsWith('barcode')) return 'Barcode'
-    return 'Image'
-  }
+  if (node.type === 'qr') return 'QR code'
+  if (node.type === 'barcode') return 'Barcode'
+  if (node.type === 'image') return 'Image'
   if (node.type === 'rect') return 'Rectangle'
   if (node.type === 'circle') return 'Circle'
   if (node.type === 'line') return 'Line'

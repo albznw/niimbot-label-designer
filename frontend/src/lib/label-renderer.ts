@@ -49,3 +49,23 @@ export function bitmapToCanvas(
   ctx.putImageData(imageData, 0, 0)
   return canvas
 }
+
+/**
+ * Rotate a bitmap 90° clockwise.
+ * Mapping: new[r][c] = old[h-1-c][r]  where newW=h, newH=w.
+ */
+export function rotateBitmap90CW(
+  bitmap: Uint8Array,
+  w: number,
+  h: number
+): { bitmap: Uint8Array; w: number; h: number } {
+  const newW = h
+  const newH = w
+  const out = new Uint8Array(newW * newH)
+  for (let r = 0; r < newH; r++) {
+    for (let c = 0; c < newW; c++) {
+      out[r * newW + c] = bitmap[(h - 1 - c) * w + r]
+    }
+  }
+  return { bitmap: out, w: newW, h: newH }
+}

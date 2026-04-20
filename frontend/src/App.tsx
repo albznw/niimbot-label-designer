@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Template, Variable } from './types/project'
-import type { LabelSize } from './types/label'
-import { LABEL_DIMS } from './types/label'
+import type { LabelSize, LabelDisplaySettings } from './types/label'
+import { getCanvasDims, DEFAULT_LABEL_SETTINGS } from './types/label'
 import * as api from './lib/api'
 import { defaultHtmlForSize } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
@@ -41,10 +41,9 @@ export function App() {
   const [modeSwitchNotice, setModeSwitchNotice] = useState<string | null>(null)
   const [canvasNodes, setCanvasNodes] = useState<NodeConfig[]>([])
   const [canvasSelectedIds, setCanvasSelectedIds] = useState<string[]>([])
-  const [labelSettings, setLabelSettings] = useState<{ labelType: number; density: number }>({
-    labelType: 1,
-    density: 3,
-  })
+  const [labelSettings, setLabelSettings] = useState<LabelDisplaySettings>(
+    DEFAULT_LABEL_SETTINGS
+  )
 
   // Printer state
   const [printerStatus, setPrinterStatus] = useState<PrinterStatus>({
@@ -55,6 +54,7 @@ export function App() {
   const [connecting, setConnecting] = useState(false)
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showLabelSettings, setShowLabelSettings] = useState(false)
   const [printSuccess, setPrintSuccess] = useState<string | null>(null)
 
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
@@ -83,7 +83,7 @@ export function App() {
     setModeSwitchNotice(null)
     setCanvasNodes([])
     setCanvasSelectedIds([])
-    setLabelSettings({ labelType: 1, density: 3 })
+    setLabelSettings(DEFAULT_LABEL_SETTINGS)
     if (selectedTemplate) {
       const defaults: Record<string, string> = {}
       selectedTemplate.variables.forEach((v) => { defaults[v.name] = v.default })
@@ -128,14 +128,6 @@ export function App() {
     setCanvasNodes(nodes)
     const ids = canvasRef.current?.getSelectedIds() ?? []
     setCanvasSelectedIds(ids)
-    const settings = canvasRef.current?.getLabelSettings()
-    if (settings) {
-      setLabelSettings((prev) =>
-        prev.labelType === settings.labelType && prev.density === settings.density
-          ? prev
-          : settings
-      )
-    }
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
       api.updateTemplate(selectedTemplateId, { canvas_json: json })
@@ -188,7 +180,18 @@ export function App() {
   }, [selectedTemplateId])
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
-  const dims = selectedTemplate ? LABEL_DIMS[selectedTemplate.label_size] : { w: 0, h: 0 }
+  const dims = selectedTemplate
+    ? getCanvasDims(selectedTemplate.label_size, labelSettings.orientation)
+    : { w: 0, h: 0 }
+
+  const handleLabelSizeChange = useCallback(async (size: LabelSize) => {
+    if (!selectedTemplateId) return
+    setTemplates((prev) =>
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, label_size: size } : t)
+    )
+    await api.updateTemplate(selectedTemplateId, { label_size: size })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
+  }, [selectedTemplateId])
 
   const handleSwitchMode = useCallback(() => {
     if (!selectedTemplateId || !selectedTemplate) return
@@ -288,6 +291,14 @@ export function App() {
           onConnectSerial={handleConnectSerial}
           onDisconnect={handleDisconnect}
         />
+        {selectedTemplate && editorMode === 'canvas' && (
+          <button
+            onClick={() => setShowLabelSettings(true)}
+            className="text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10"
+          >
+            Label Settings
+          </button>
+        )}
         <button
           onClick={() => setShowHistory(true)}
           className="text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10"
@@ -378,12 +389,14 @@ export function App() {
                       onToolChange={setActiveTool}
                       hasSelection={hasSelection}
                       onDelete={() => canvasRef.current?.deleteSelected()}
+                      onImageUpload={() => canvasRef.current?.triggerImageUpload()}
                     />
                     <LabelCanvas
                       ref={canvasRef}
                       template={selectedTemplate}
                       variableValues={variableValues}
                       activeTool={activeTool}
+                      labelSettings={labelSettings}
                       onCanvasChange={handleCanvasChange}
                       onBitmapUpdate={handleBitmapUpdate}
                       onSelectionChange={handleSelectionChange}
@@ -413,20 +426,13 @@ export function App() {
               <div className="w-[280px] shrink-0 border-l border-white/10 flex flex-col overflow-hidden bg-[#2a2a2a]">
                 <BitmapPreview
                   bitmap={bitmap}
-                  width={dims.w}
-                  height={dims.h}
+                  width={bitmapDims.w || dims.w}
+                  height={bitmapDims.h || dims.h}
                   labelSize={selectedTemplate.label_size}
+                  orientation={labelSettings.orientation}
                 />
                 {editorMode === 'canvas' && (
                   <>
-                    <LabelSettings
-                      labelType={labelSettings.labelType}
-                      density={labelSettings.density}
-                      onChange={(s) => {
-                        setLabelSettings((prev) => ({ ...prev, ...s }))
-                        canvasRef.current?.setLabelSettings(s)
-                      }}
-                    />
                     <div className="flex-1 overflow-y-auto">
                       {multiSelected && (
                         <AlignPanel
@@ -476,6 +482,28 @@ export function App() {
 
       {showHistory && (
         <PrintHistory onClose={() => setShowHistory(false)} />
+      )}
+
+      {showLabelSettings && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowLabelSettings(false)}>
+          <div className="bg-[#2a2a2a] border border-white/10 rounded-lg w-80 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <h2 className="text-sm font-semibold">Label Settings</h2>
+              <button onClick={() => setShowLabelSettings(false)} className="text-gray-400 hover:text-white text-lg leading-none">×</button>
+            </div>
+            <LabelSettings
+              labelType={labelSettings.labelType}
+              density={labelSettings.density}
+              cornerStyle={labelSettings.cornerStyle}
+              orientation={labelSettings.orientation}
+              labelSize={selectedTemplate?.label_size ?? '50x30'}
+              onLabelSizeChange={handleLabelSizeChange}
+              onChange={(s) => {
+                setLabelSettings((prev) => ({ ...prev, ...s }))
+              }}
+            />
+          </div>
+        </div>
       )}
     </div>
   )

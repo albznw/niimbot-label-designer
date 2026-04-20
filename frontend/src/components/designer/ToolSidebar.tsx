@@ -19,6 +19,7 @@ export interface ToolSidebarProps {
   onToolChange: (t: Tool) => void
   hasSelection: boolean
   onDelete: () => void
+  onImageUpload?: () => void
 }
 
 interface ToolEntry {
@@ -39,7 +40,7 @@ const TOOLS: ToolEntry[] = [
   { id: 'image', label: 'Image', title: 'Image (I)', icon: <Icon path={mdiImageOutline} size={0.8} /> },
 ]
 
-export function ToolSidebar({ activeTool, onToolChange, hasSelection, onDelete }: ToolSidebarProps) {
+export function ToolSidebar({ activeTool, onToolChange, hasSelection, onDelete, onImageUpload }: ToolSidebarProps) {
   return (
     <div className="w-12 shrink-0 flex flex-col items-center gap-1 py-2 bg-[#2a2a2a] border-r border-white/10">
       {TOOLS.map((tool) => {
@@ -50,7 +51,7 @@ export function ToolSidebar({ activeTool, onToolChange, hasSelection, onDelete }
             type="button"
             title={tool.title}
             aria-label={tool.label}
-            onClick={() => onToolChange(tool.id)}
+            onClick={() => tool.id === 'image' && onImageUpload ? onImageUpload() : onToolChange(tool.id)}
             className={`w-9 h-9 flex items-center justify-center rounded border transition-colors ${
               isActive
                 ? 'border-accent bg-accent/20 text-white'

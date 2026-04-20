@@ -19,14 +19,15 @@ import {
 } from 'react-konva'
 import Konva from 'konva'
 import type { Template } from '../../types/project'
-import { LABEL_DIMS } from '../../types/label'
+import { getCanvasDims } from '../../types/label'
+import type { LabelDisplaySettings } from '../../types/label'
 import {
   applyVariables,
   generateQRDataURL,
   generateBarcodeDataURLAsync,
   konvaStageToCanvas,
 } from '../../lib/canvas-utils'
-import { canvasTo1BitBitmap } from '../../lib/label-renderer'
+import { canvasTo1BitBitmap, rotateBitmap90CW } from '../../lib/label-renderer'
 import type { Tool } from './ToolSidebar'
 import type { AlignDirection } from './AlignPanel'
 import type { AlignDocDirection } from './DocAlignPanel'
@@ -92,11 +93,28 @@ export type NodeConfig =
       rotation: number
       src: string
     }
-
-export interface LabelSettings {
-  labelType: number
-  density: number
-}
+  | {
+      id: string
+      type: 'qr'
+      x: number
+      y: number
+      width: number
+      height: number
+      rotation: number
+      content: string
+      src: string
+    }
+  | {
+      id: string
+      type: 'barcode'
+      x: number
+      y: number
+      width: number
+      height: number
+      rotation: number
+      content: string
+      src: string
+    }
 
 export interface LabelCanvasHandle {
   addText: () => void
@@ -120,14 +138,14 @@ export interface LabelCanvasHandle {
   moveToBack: (id: string) => void
   moveForward: (id: string) => void
   moveBackward: (id: string) => void
-  getLabelSettings: () => LabelSettings
-  setLabelSettings: (s: { labelType?: number; density?: number }) => void
+  triggerImageUpload: () => void
 }
 
 interface LabelCanvasProps {
   template: Template
   variableValues: Record<string, string>
   activeTool: Tool
+  labelSettings: LabelDisplaySettings
   onCanvasChange: (json: string) => void
   onBitmapUpdate: (bitmap: Uint8Array, w: number, h: number) => void
   onSelectionChange: (objs: NodeConfig[]) => void
@@ -143,38 +161,21 @@ function genId(prefix: string): string {
 interface CanvasData {
   version: 1
   nodes: NodeConfig[]
-  labelType: number
-  density: number
 }
 
-const DEFAULT_LABEL_TYPE = 1
-const DEFAULT_DENSITY = 3
-
-interface ParsedCanvas {
-  nodes: NodeConfig[]
-  labelType: number
-  density: number
-}
-
-function parseCanvasJson(json: string | null): ParsedCanvas {
-  const empty: ParsedCanvas = {
-    nodes: [],
-    labelType: DEFAULT_LABEL_TYPE,
-    density: DEFAULT_DENSITY,
-  }
-  if (!json) return empty
+function parseCanvasJson(json: string | null): NodeConfig[] {
+  if (!json) return []
   try {
     const parsed = JSON.parse(json)
     if (Array.isArray(parsed)) {
-      const nodes = parsed.filter(
+      return parsed.filter(
         (n): n is NodeConfig =>
           n && typeof n === 'object' && typeof n.id === 'string' && typeof n.type === 'string'
       )
-      return { nodes, labelType: DEFAULT_LABEL_TYPE, density: DEFAULT_DENSITY }
     }
     if (parsed && typeof parsed === 'object' && parsed.version === 1) {
       const data = parsed as Partial<CanvasData>
-      const nodes = Array.isArray(data.nodes)
+      return Array.isArray(data.nodes)
         ? data.nodes.filter(
             (n): n is NodeConfig =>
               n != null &&
@@ -183,21 +184,16 @@ function parseCanvasJson(json: string | null): ParsedCanvas {
               typeof (n as NodeConfig).type === 'string'
           )
         : []
-      return {
-        nodes,
-        labelType: typeof data.labelType === 'number' ? data.labelType : DEFAULT_LABEL_TYPE,
-        density: typeof data.density === 'number' ? data.density : DEFAULT_DENSITY,
-      }
     }
-    return empty
+    return []
   } catch {
-    return empty
+    return []
   }
 }
 
 // Compute bounding box of a node in stage coords (axis-aligned, rotation ignored for simplicity)
 function getNodeBBox(node: NodeConfig): { x: number; y: number; width: number; height: number } {
-  if (node.type === 'text' || node.type === 'rect' || node.type === 'image') {
+  if (node.type === 'text' || node.type === 'rect' || node.type === 'image' || node.type === 'qr' || node.type === 'barcode') {
     const h = 'height' in node ? node.height : 0
     const w = 'width' in node ? node.width : 0
     return { x: node.x, y: node.y, width: w, height: h }
@@ -325,6 +321,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       template,
       variableValues,
       activeTool,
+      labelSettings,
       onCanvasChange,
       onBitmapUpdate,
       onSelectionChange,
@@ -332,23 +329,14 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     },
     ref
   ) {
-    const dims = LABEL_DIMS[template.label_size]
+    const dims = getCanvasDims(template.label_size, labelSettings.orientation)
 
-    const initialParsed = parseCanvasJson(template.canvas_json)
-    const [nodes, setNodes] = useState<NodeConfig[]>(() => initialParsed.nodes)
+    const [nodes, setNodes] = useState<NodeConfig[]>(() =>
+      parseCanvasJson(template.canvas_json)
+    )
     const [selectedIds, setSelectedIds] = useState<string[]>([])
-    const [labelType, setLabelType] = useState<number>(initialParsed.labelType)
-    const [density, setDensity] = useState<number>(initialParsed.density)
-    const labelTypeRef = useRef(labelType)
-    const densityRef = useRef(density)
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const pendingImagePosRef = useRef<{ x: number; y: number } | null>(null)
-    useEffect(() => {
-      labelTypeRef.current = labelType
-    }, [labelType])
-    useEffect(() => {
-      densityRef.current = density
-    }, [density])
 
     const stageRef = useRef<Konva.Stage | null>(null)
     const layerRef = useRef<Konva.Layer | null>(null)
@@ -391,10 +379,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
 
     // Reload nodes when template id changes (new template loaded)
     useEffect(() => {
-      const parsed = parseCanvasJson(template.canvas_json)
-      setNodes(parsed.nodes)
-      setLabelType(parsed.labelType)
-      setDensity(parsed.density)
+      setNodes(parseCanvasJson(template.canvas_json))
       setSelectedIds([])
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [template.id])
@@ -466,8 +451,22 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       }
       stage.batchDraw()
 
-      onBitmapUpdateRef.current(bitmap, w, h)
-    }, [dims])
+      // Rotate bitmap 90° CW for portrait 50x30 so printer always gets 400x240
+      let finalBitmap = bitmap
+      let finalW = w
+      let finalH = h
+      if (
+        template.label_size === '50x30' &&
+        labelSettings.orientation === 'portrait'
+      ) {
+        const rotated = rotateBitmap90CW(bitmap, w, h)
+        finalBitmap = rotated.bitmap
+        finalW = rotated.w
+        finalH = rotated.h
+      }
+
+      onBitmapUpdateRef.current(finalBitmap, finalW, finalH)
+    }, [dims, template.label_size, labelSettings.orientation])
 
     const scheduleUpdate = useCallback(() => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -475,8 +474,6 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         const data: CanvasData = {
           version: 1,
           nodes: nodesRef.current,
-          labelType: labelTypeRef.current,
-          density: densityRef.current,
         }
         const json = JSON.stringify(data)
         onCanvasChangeRef.current(json)
@@ -487,7 +484,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     // Schedule update on any node/settings change
     useEffect(() => {
       scheduleUpdate()
-    }, [nodes, labelType, density, scheduleUpdate])
+    }, [nodes, scheduleUpdate])
 
     // Re-render bitmap when variable preview values change
     useEffect(() => {
@@ -504,6 +501,12 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [template.id])
 
+    // Re-render when orientation or label size changes (canvas dims change)
+    useEffect(() => {
+      renderBitmap()
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [labelSettings.orientation, template.label_size])
+
     // Cleanup on unmount
     useEffect(() => {
       return () => {
@@ -515,6 +518,24 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       setNodes((prev) =>
         prev.map((n) => (n.id === id ? ({ ...n, ...patch } as NodeConfig) : n))
       )
+      if ('content' in patch) {
+        const node = nodesRef.current.find((n) => n.id === id)
+        if (!node) return
+        const newContent = (patch as { content: string }).content
+        if (node.type === 'qr') {
+          generateQRDataURL(newContent, node.width).then((src) => {
+            setNodes((prev) =>
+              prev.map((n) => (n.id === id ? ({ ...n, src } as NodeConfig) : n))
+            )
+          })
+        } else if (node.type === 'barcode') {
+          generateBarcodeDataURLAsync(newContent, node.width, node.height).then((src) => {
+            setNodes((prev) =>
+              prev.map((n) => (n.id === id ? ({ ...n, src } as NodeConfig) : n))
+            )
+          })
+        }
+      }
     }, [])
 
     const registerNodeRef = useCallback((id: string) => {
@@ -607,12 +628,13 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       const id = genId('qr')
       const newNode: NodeConfig = {
         id,
-        type: 'image',
+        type: 'qr',
         x,
         y,
         width: 80,
         height: 80,
         rotation: 0,
+        content,
         src: dataUrl,
       }
       setNodes((prev) => [...prev, newNode])
@@ -654,31 +676,18 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       })
     }, [])
 
-    const handleImageFile = useCallback(
-      (file: File, x: number, y: number) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const result = reader.result
-          if (typeof result === 'string') {
-            void addImageAt(x, y, result)
-          }
-        }
-        reader.readAsDataURL(file)
-      },
-      [addImageAt]
-    )
-
     const addBarcodeAt = useCallback(async (x: number, y: number, content: string) => {
       const dataUrl = await generateBarcodeDataURLAsync(content, 120, 40)
       const id = genId('barcode')
       const newNode: NodeConfig = {
         id,
-        type: 'image',
+        type: 'barcode',
         x,
         y,
         width: 120,
         height: 40,
         rotation: 0,
+        content,
         src: dataUrl,
       }
       setNodes((prev) => [...prev, newNode])
@@ -944,12 +953,9 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       moveBackward(id: string) {
         moveBackwardInternal(id)
       },
-      getLabelSettings() {
-        return { labelType: labelTypeRef.current, density: densityRef.current }
-      },
-      setLabelSettings(s: { labelType?: number; density?: number }) {
-        if (typeof s.labelType === 'number') setLabelType(s.labelType)
-        if (typeof s.density === 'number') setDensity(s.density)
+      triggerImageUpload() {
+        pendingImagePosRef.current = { x: Math.round(dims.w / 2), y: Math.round(dims.h / 2) }
+        fileInputRef.current?.click()
       },
     }))
 
@@ -1079,12 +1085,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         onToolUsedRef.current()
         return
       }
-      if (tool === 'image') {
-        pendingImagePosRef.current = { x, y }
-        fileInputRef.current?.click()
-        return
-      }
     }
+
 
     const handleImageInputChange = (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
@@ -1093,8 +1095,16 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       e.target.value = ''
       pendingImagePosRef.current = null
       if (!file || !pos) return
-      handleImageFile(file, pos.x, pos.y)
-      onToolUsedRef.current()
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result === 'string') {
+          void addImageAt(pos.x, pos.y, result).then(() => {
+            onToolUsedRef.current()
+          })
+        }
+      }
+      reader.readAsDataURL(file)
     }
 
     // --- Snap guides ---
@@ -1237,13 +1247,44 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             onDragMove={handleStageDragMove}
             onDragEnd={handleStageDragEnd}
           >
-            <Layer ref={layerRef}>
+            <Layer
+              ref={layerRef}
+              clipFunc={(ctx) => {
+                const isRounded = labelSettings.cornerStyle === 'rounded'
+                const is30x30 = template.label_size === '30x30'
+                ctx.beginPath()
+                if (!isRounded) {
+                  ctx.rect(0, 0, dims.w, dims.h)
+                } else if (is30x30) {
+                  const r = Math.min(dims.w, dims.h / 2) * 0.08
+                  if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(0, 0, dims.w, dims.h / 2, [r, r, 0, 0])
+                    ctx.roundRect(0, dims.h / 2, dims.w, dims.h / 2, [0, 0, r, r])
+                  } else {
+                    ctx.rect(0, 0, dims.w, dims.h)
+                  }
+                } else {
+                  const r = Math.min(dims.w, dims.h) * 0.08
+                  if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(0, 0, dims.w, dims.h, r)
+                  } else {
+                    ctx.rect(0, 0, dims.w, dims.h)
+                  }
+                }
+                ctx.closePath()
+              }}
+            >
               <Rect
                 x={0}
                 y={0}
                 width={dims.w}
                 height={dims.h}
                 fill="white"
+                cornerRadius={
+                  labelSettings.cornerStyle === 'rounded' && template.label_size !== '30x30'
+                    ? Math.min(dims.w, dims.h) * 0.08
+                    : 0
+                }
                 listening={true}
                 name="bg"
               />
@@ -1409,6 +1450,17 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                     <ImageNode
                       key={node.id}
                       node={node}
+                      onSelect={(e) => handleSelectNode(node.id, e)}
+                      onChange={(patch) => updateNode(node.id, patch)}
+                      shapeRef={registerNodeRef(node.id)}
+                    />
+                  )
+                }
+                if (node.type === 'qr' || node.type === 'barcode') {
+                  return (
+                    <ImageNode
+                      key={node.id}
+                      node={node as unknown as Extract<NodeConfig, { type: 'image' }>}
                       onSelect={(e) => handleSelectNode(node.id, e)}
                       onChange={(patch) => updateNode(node.id, patch)}
                       shapeRef={registerNodeRef(node.id)}
