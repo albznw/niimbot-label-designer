@@ -32,8 +32,12 @@ interface ObjState {
   // circle
   radiusX: number
   radiusY: number
+  // line
+  lineLength: number
+  lineAngle: number
   // qr / barcode
   content: string
+  errorCorrectionLevel: 'L' | 'M' | 'Q' | 'H'
 }
 
 function parseFontStyle(style: string): { bold: boolean; italic: boolean } {
@@ -69,7 +73,10 @@ function readState(node: NodeConfig | null): ObjState {
     strokeWidth: 1,
     radiusX: 0,
     radiusY: 0,
+    lineLength: 100,
+    lineAngle: 0,
     content: '',
+    errorCorrectionLevel: 'M' as const,
   }
   if (!node) return defaults
 
@@ -119,10 +126,15 @@ function readState(node: NodeConfig | null): ObjState {
   }
 
   if (node.type === 'line') {
+    const pts = node.points ?? [0, 0, 100, 0]
+    const dx = (pts[2] ?? 100) - (pts[0] ?? 0)
+    const dy = (pts[3] ?? 0) - (pts[1] ?? 0)
     return {
       ...base,
       stroke: String(node.stroke ?? '#000000'),
       strokeWidth: node.strokeWidth ?? 1,
+      lineLength: Math.round(Math.sqrt(dx * dx + dy * dy)),
+      lineAngle: Math.round(Math.atan2(dy, dx) * (180 / Math.PI)),
     }
   }
 
@@ -132,6 +144,7 @@ function readState(node: NodeConfig | null): ObjState {
       width: Math.round(node.width ?? 0),
       height: Math.round(node.height ?? 0),
       content: node.content ?? '',
+      errorCorrectionLevel: node.type === 'qr' ? (node.errorCorrectionLevel ?? 'M') : 'M',
     }
   }
 
@@ -225,6 +238,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
       if (single.type === 'line') {
         nodePatch.stroke = next.stroke
         nodePatch.strokeWidth = next.strokeWidth
+        const rad = next.lineAngle * (Math.PI / 180)
+        nodePatch.points = [0, 0, Math.round(next.lineLength * Math.cos(rad)), Math.round(next.lineLength * Math.sin(rad))]
       }
 
       if (single.type === 'image') {
@@ -236,6 +251,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
         nodePatch.width = next.width
         nodePatch.height = next.height
         nodePatch.content = next.content
+        if (single.type === 'qr') nodePatch.errorCorrectionLevel = next.errorCorrectionLevel
       }
 
       onUpdate(nodePatch as Partial<NodeConfig>)
@@ -385,6 +401,28 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               onChange={(e) => apply({ content: e.target.value })}
             />
           </label>
+          {isQR && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-gray-400">Error correction</span>
+              <div className="flex gap-1">
+                {(['L', 'M', 'Q', 'H'] as const).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() => apply({ errorCorrectionLevel: lvl })}
+                    title={{ L: '7%', M: '15%', Q: '25%', H: '30%' }[lvl]}
+                    className={`flex-1 text-xs py-1 rounded border transition-colors ${
+                      state.errorCorrectionLevel === lvl
+                        ? 'bg-blue-600 text-white border-blue-500'
+                        : 'bg-[#1a1a1a] text-gray-300 border-white/20 hover:bg-[#242424]'
+                    }`}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -497,9 +535,32 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
 
       {isLine && (
         <section className="flex flex-col gap-3">
-          <p className="text-xs text-gray-500 uppercase tracking-wider">Style</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Line</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-gray-400">Length</span>
+              <input
+                type="number"
+                className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                value={state.lineLength}
+                min={1}
+                onChange={(e) => apply({ lineLength: Math.max(1, Number(e.target.value)) })}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-gray-400">Angle °</span>
+              <input
+                type="number"
+                className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                value={state.lineAngle}
+                min={-180}
+                max={180}
+                onChange={(e) => apply({ lineAngle: Number(e.target.value) })}
+              />
+            </label>
+          </div>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-400">Stroke</span>
+            <span className="text-xs text-gray-400">Color</span>
             <input
               type="color"
               className="w-full h-8 rounded border border-white/20 bg-[#1a1a1a] cursor-pointer"
@@ -508,12 +569,12 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-gray-400">Stroke width</span>
+            <span className="text-xs text-gray-400">Thickness</span>
             <input
               type="number"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
               value={state.strokeWidth}
-              min={0}
+              min={1}
               max={20}
               onChange={(e) => apply({ strokeWidth: Number(e.target.value) })}
             />

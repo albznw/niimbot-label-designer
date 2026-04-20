@@ -14,17 +14,24 @@ export async function konvaStageToCanvas(
   return stage.toCanvas({ width: w, height: h, pixelRatio: 1 }) as HTMLCanvasElement
 }
 
-export async function generateQRDataURL(content: string, size: number): Promise<string> {
+export async function generateQRDataURL(
+  content: string,
+  size: number,
+  errorCorrectionLevel: 'L' | 'M' | 'Q' | 'H' = 'M'
+): Promise<string> {
+  // Generate at 4x to ensure downscaling (sharper than upscaling)
+  const renderSize = Math.max(size * 4, 400)
   return QRCode.toDataURL(content, {
-    width: size,
+    width: renderSize,
     margin: 1,
+    errorCorrectionLevel,
     color: { dark: '#000000', light: '#ffffff' },
   })
 }
 
 export async function generateBarcodeDataURLAsync(
   content: string,
-  width: number,
+  _width: number,
   height: number
 ): Promise<string> {
   const svgNode = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -36,25 +43,8 @@ export async function generateBarcodeDataURLAsync(
     background: '#ffffff',
     lineColor: '#000000',
   })
+  svgNode.setAttribute('shape-rendering', 'crispEdges')
   const serializer = new XMLSerializer()
   const svgStr = serializer.serializeToString(svgNode)
-  const blob = new Blob([svgStr], { type: 'image/svg+xml' })
-  const url = URL.createObjectURL(blob)
-
-  return new Promise((resolve, reject) => {
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const ctx = canvas.getContext('2d')!
-    const img = new Image()
-    img.onload = () => {
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, width, height)
-      ctx.drawImage(img, 0, 0, width, height)
-      URL.revokeObjectURL(url)
-      resolve(canvas.toDataURL())
-    }
-    img.onerror = reject
-    img.src = url
-  })
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr)
 }

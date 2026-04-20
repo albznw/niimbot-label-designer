@@ -6,6 +6,7 @@ import {
   useCallback,
   useState,
   type ChangeEvent,
+  type CSSProperties,
 } from 'react'
 import {
   Stage,
@@ -103,6 +104,7 @@ export type NodeConfig =
       rotation: number
       content: string
       src: string
+      errorCorrectionLevel?: 'L' | 'M' | 'Q' | 'H'
     }
   | {
       id: string
@@ -331,10 +333,16 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
   ) {
     const dims = getCanvasDims(template.label_size, labelSettings.orientation)
 
+    const [zoom, setZoom] = useState(1)
+
     const [nodes, setNodes] = useState<NodeConfig[]>(() =>
       parseCanvasJson(template.canvas_json)
     )
     const [selectedIds, setSelectedIds] = useState<string[]>([])
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
+    const [editingValue, setEditingValue] = useState('')
+    const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+    const [textareaStyle, setTextareaStyle] = useState<CSSProperties>({})
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const pendingImagePosRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -489,7 +497,30 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     // Re-render bitmap when variable preview values change
     useEffect(() => {
       variableValuesRef.current = variableValues
-      renderBitmap()
+      // Regenerate QR/barcode src with substituted variables
+      const qrBarcodeNodes = nodesRef.current.filter(
+        (n) => n.type === 'qr' || n.type === 'barcode'
+      )
+      if (qrBarcodeNodes.length > 0) {
+        qrBarcodeNodes.forEach((n) => {
+          const resolved = applyVariables((n as { content?: string }).content ?? '', variableValues)
+          if (n.type === 'qr') {
+            generateQRDataURL(resolved, n.width, n.errorCorrectionLevel).then((src) => {
+              setNodes((prev) =>
+                prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
+              )
+            })
+          } else {
+            generateBarcodeDataURLAsync(resolved, n.width, n.height).then((src) => {
+              setNodes((prev) =>
+                prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
+              )
+            })
+          }
+        })
+      } else {
+        renderBitmap()
+      }
     }, [variableValues, renderBitmap])
 
     // Initial bitmap render after mount
@@ -518,12 +549,13 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       setNodes((prev) =>
         prev.map((n) => (n.id === id ? ({ ...n, ...patch } as NodeConfig) : n))
       )
-      if ('content' in patch) {
+      if ('content' in patch || 'errorCorrectionLevel' in patch) {
         const node = nodesRef.current.find((n) => n.id === id)
         if (!node) return
-        const newContent = (patch as { content: string }).content
+        const newContent = ('content' in patch ? (patch as { content: string }).content : null) ?? (node.type === 'qr' || node.type === 'barcode' ? node.content : '')
+        const ecl = ('errorCorrectionLevel' in patch ? (patch as { errorCorrectionLevel: 'L'|'M'|'Q'|'H' }).errorCorrectionLevel : null) ?? (node.type === 'qr' ? node.errorCorrectionLevel : undefined)
         if (node.type === 'qr') {
-          generateQRDataURL(newContent, node.width).then((src) => {
+          generateQRDataURL(newContent, node.width, ecl).then((src) => {
             setNodes((prev) =>
               prev.map((n) => (n.id === id ? ({ ...n, src } as NodeConfig) : n))
             )
@@ -537,6 +569,59 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         }
       }
     }, [])
+
+    const commitEdit = useCallback(() => {
+      if (!editingNodeId) return
+      updateNode(editingNodeId, { text: editingValue })
+      setEditingNodeId(null)
+    }, [editingNodeId, editingValue, updateNode])
+
+    const cancelEdit = useCallback(() => {
+      setEditingNodeId(null)
+    }, [])
+
+    useEffect(() => {
+      if (!editingNodeId) return
+      const stage = stageRef.current
+      if (!stage) return
+      const konvaNode = stage.findOne('#' + editingNodeId) as Konva.Text | undefined
+      if (!konvaNode) return
+      const stageRect = stage.container().getBoundingClientRect()
+      const absPos = konvaNode.getAbsolutePosition()
+      const w = Math.max(konvaNode.width() * zoom, 60)
+      const h = Math.max(konvaNode.height() * zoom, konvaNode.fontSize() * zoom * 1.5)
+      const rotation = konvaNode.rotation()
+      setTextareaStyle({
+        position: 'fixed',
+        left: stageRect.left + absPos.x * zoom,
+        top: stageRect.top + absPos.y * zoom,
+        width: w,
+        minHeight: h,
+        fontSize: konvaNode.fontSize() * zoom,
+        fontFamily: konvaNode.fontFamily(),
+        fontWeight: konvaNode.fontStyle()?.includes('bold') ? 'bold' : 'normal',
+        fontStyle: konvaNode.fontStyle()?.includes('italic') ? 'italic' : 'normal',
+        textAlign: konvaNode.align() as CSSProperties['textAlign'],
+        color: konvaNode.fill() as string,
+        background: 'rgba(20,20,20,0.95)',
+        border: '1.5px solid rgba(59,130,246,0.8)',
+        outline: 'none',
+        padding: '0px',
+        resize: 'none',
+        zIndex: 1000,
+        lineHeight: '1.2',
+        overflow: 'hidden',
+        borderRadius: '2px',
+        boxSizing: 'border-box',
+        ...(rotation ? { transform: `rotate(${rotation}deg)`, transformOrigin: '0 0' } : {}),
+      })
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus()
+          textareaRef.current.select()
+        }
+      }, 0)
+    }, [editingNodeId, zoom])
 
     const registerNodeRef = useCallback((id: string) => {
       return (n: Konva.Node | null) => {
@@ -624,7 +709,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     }, [])
 
     const addQRAt = useCallback(async (x: number, y: number, content: string) => {
-      const dataUrl = await generateQRDataURL(content, 80)
+      const dataUrl = await generateQRDataURL(content, 80, 'M')
       const id = genId('qr')
       const newNode: NodeConfig = {
         id,
@@ -927,10 +1012,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       updateSelected(patch: Record<string, unknown>) {
         const ids = selectedIdsRef.current
         if (ids.length !== 1) return
-        const id = ids[0]
-        setNodes((prev) =>
-          prev.map((n) => (n.id === id ? ({ ...n, ...patch } as NodeConfig) : n))
-        )
+        updateNode(ids[0], patch as Partial<NodeConfig>)
       },
       getNodes() {
         return nodesRef.current
@@ -1228,8 +1310,24 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       clearGuides()
     }, [clearGuides])
 
+    const containerRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+      const el = containerRef.current
+      if (!el) return
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault()
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+        setZoom((z) => Math.max(0.25, Math.min(8, z * factor)))
+      }
+      el.addEventListener('wheel', onWheel, { passive: false })
+      return () => el.removeEventListener('wheel', onWheel)
+    }, [])
+
     return (
-      <div className="flex items-center justify-center flex-1 bg-[#1a1a1a] overflow-auto p-4">
+      <div
+        ref={containerRef}
+        className="flex items-center justify-center flex-1 bg-[#1a1a1a] overflow-auto p-4"
+      >
         <input
           ref={fileInputRef}
           type="file"
@@ -1237,7 +1335,10 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           style={{ display: 'none' }}
           onChange={handleImageInputChange}
         />
-        <div className="shadow-2xl border border-white/10" style={{ lineHeight: 0 }}>
+        <div
+          className="shadow-2xl border border-white/10"
+          style={{ lineHeight: 0, transform: `scale(${zoom})`, transformOrigin: 'center center', transition: 'transform 0.05s ease-out' }}
+        >
           <Stage
             width={dims.w}
             height={dims.h}
