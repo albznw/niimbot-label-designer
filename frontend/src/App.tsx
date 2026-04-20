@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { sseClient } from './lib/sse-client'
 import type { Template, Variable } from './types/project'
 import type { LabelSize, LabelDisplaySettings } from './types/label'
 import { getCanvasDims, DEFAULT_LABEL_SETTINGS } from './types/label'
@@ -61,14 +62,47 @@ export function App() {
   const [showIconModal, setShowIconModal] = useState(false)
   const [printSuccess, setPrintSuccess] = useState<string | null>(null)
 
+  const [toast, setToast] = useState<string | null>(null)
+
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selectedTemplateIdRef = useRef(selectedTemplateId)
+  useEffect(() => { selectedTemplateIdRef.current = selectedTemplateId }, [selectedTemplateId])
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 3000)
+  }, [])
 
   // Wire up disconnect callback
   useEffect(() => {
     printerClient.setDisconnectCallback(() => {
       setPrinterStatus(printerClient.getStatus())
     })
+  }, [])
+
+  // Connect SSE queue stream
+  useEffect(() => {
+    sseClient.connect((event) => {
+      if (event.type === 'queue:variables') {
+        if (event.template_id !== selectedTemplateIdRef.current) {
+          setSelectedTemplateId(event.template_id)
+          showToast('Template switched by remote print request')
+        }
+        setPrintRows(event.rows)
+        setActivePrintRow(0)
+        setShowPrintDialog(true)
+      } else if (event.type === 'queue:bitmap') {
+        const binary = atob(event.bitmap_b64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        setBitmap(bytes)
+        setBitmapDims({ w: event.width, h: event.height })
+        setShowPrintDialog(true)
+      }
+    })
+    return () => sseClient.disconnect()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Load templates on mount
@@ -353,6 +387,11 @@ export function App() {
         {printSuccess && (
           <span className="text-xs text-green-400 bg-green-900/20 px-2 py-0.5 rounded">
             {printSuccess}
+          </span>
+        )}
+        {toast && (
+          <span className="text-xs text-blue-300 bg-blue-900/20 px-2 py-0.5 rounded animate-pulse">
+            {toast}
           </span>
         )}
       </header>
