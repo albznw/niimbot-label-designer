@@ -177,3 +177,19 @@ export function rotateBitmap90CW(
   }
   return { bitmap: out, w: newW, h: newH }
 }
+
+export function rotateBitmap90CCW(
+  bitmap: Uint8Array,
+  w: number,
+  h: number
+): { bitmap: Uint8Array; w: number; h: number } {
+  const newW = h
+  const newH = w
+  const out = new Uint8Array(newW * newH)
+  for (let r = 0; r < newH; r++) {
+    for (let c = 0; c < newW; c++) {
+      out[r * newW + c] = bitmap[c * w + (w - 1 - r)]
+    }
+  }
+  return { bitmap: out, w: newW, h: newH }
+}
