@@ -51,13 +51,8 @@ function drawBitmap(
   ctx.lineWidth = 3
   ctx.setLineDash([])
   ctx.beginPath()
-  if (labelSize === '50x30' && orientation === 'portrait') {
-    ctx.moveTo(displayW - 1.5, 0)
-    ctx.lineTo(displayW - 1.5, displayH)
-  } else {
-    ctx.moveTo(0, 1.5)
-    ctx.lineTo(displayW, 1.5)
-  }
+  ctx.moveTo(0, 1.5)
+  ctx.lineTo(displayW, 1.5)
   ctx.stroke()
   ctx.restore()
 }
