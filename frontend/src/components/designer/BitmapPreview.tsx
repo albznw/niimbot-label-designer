@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import type { LabelOrientation, LabelSize } from '../../types/label'
+import type { LabelCornerStyle, LabelOrientation, LabelSize } from '../../types/label'
 import { bitmapToImageData } from '../../lib/label-renderer'
 
 interface BitmapPreviewProps {
@@ -8,11 +8,12 @@ interface BitmapPreviewProps {
   height: number
   labelSize: LabelSize
   orientation?: LabelOrientation
+  cornerStyle?: LabelCornerStyle
   printCount?: number
   activePrintRow?: number
 }
 
-const MAX_W = 400
+const MAX_W = 240
 const MAX_H = 300
 
 function drawBitmap(
@@ -68,6 +69,7 @@ export function BitmapPreview({
   height,
   labelSize,
   orientation = 'landscape',
+  cornerStyle,
   printCount = 1,
   activePrintRow = 0,
 }: BitmapPreviewProps) {
@@ -108,21 +110,25 @@ export function BitmapPreview({
 
         {!bitmap ? (
           <div
-            className="flex items-center justify-center bg-[#1a1a1a] rounded border border-white/5 text-gray-600 text-xs"
-            style={{ width: displayW, height: displayH }}
+            className="flex items-center justify-center bg-[#1a1a1a] border border-white/5 text-gray-600 text-xs mx-auto"
+            style={{ width: displayW, height: displayH, borderRadius: cornerStyle === 'rounded' ? Math.round(Math.min(displayW, displayH) * 0.08) : 4 }}
           >
             Render a label to see preview
           </div>
         ) : (
-          <canvas
-            ref={canvasRef}
-            width={displayW}
-            height={displayH}
-            className="rounded border border-white/10 cursor-zoom-in"
-            style={{ imageRendering: 'pixelated' }}
+          <div
+            className="border border-white/10 cursor-zoom-in mx-auto"
+            style={{ width: displayW, height: displayH, borderRadius: cornerStyle === 'rounded' ? Math.round(Math.min(displayW, displayH) * 0.08) : 4, overflow: 'hidden', lineHeight: 0 }}
             onClick={toggle}
             title="Click to expand"
-          />
+          >
+            <canvas
+              ref={canvasRef}
+              width={displayW}
+              height={displayH}
+              style={{ imageRendering: 'pixelated', display: 'block' }}
+            />
+          </div>
         )}
 
         <p className="text-xs text-gray-600">
@@ -136,13 +142,17 @@ export function BitmapPreview({
           className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 cursor-zoom-out"
           onClick={toggle}
         >
-          <canvas
-            ref={modalCanvasRef}
-            width={modalW}
-            height={modalH}
-            className="rounded border border-white/20 shadow-2xl"
-            style={{ imageRendering: 'pixelated' }}
-          />
+          <div
+            className="border border-white/20 shadow-2xl"
+            style={{ width: modalW, height: modalH, borderRadius: cornerStyle === 'rounded' ? Math.round(Math.min(modalW, modalH) * 0.08) : 4, overflow: 'hidden', lineHeight: 0 }}
+          >
+            <canvas
+              ref={modalCanvasRef}
+              width={modalW}
+              height={modalH}
+              style={{ imageRendering: 'pixelated', display: 'block' }}
+            />
+          </div>
         </div>
       )}
     </>

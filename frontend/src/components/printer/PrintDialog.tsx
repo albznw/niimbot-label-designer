@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Template } from '../../types/project'
 import type { PrinterStatus, PrintOptions } from '../../lib/printer-client'
-import { BitmapPreview } from '../designer/BitmapPreview'
+import { bitmapToImageData } from '../../lib/label-renderer'
 
 interface PrintDialogProps {
   template: Template
@@ -9,8 +9,10 @@ interface PrintDialogProps {
   bitmapWidth: number
   bitmapHeight: number
   printerStatus: PrinterStatus
-  labelSettings: { labelType: number; density: number }
+  labelSettings: { labelType: number; density: number; cornerStyle?: 'rect' | 'rounded'; orientation?: 'landscape' | 'portrait' }
+  printRows?: Record<string, string>[]
   onPrint: (variableValues: Record<string, string>, options: PrintOptions) => Promise<void>
+  onBatchPrint?: (rows: Record<string, string>[], options: PrintOptions) => Promise<void>
   onClose: () => void
 }
 
@@ -21,7 +23,9 @@ export function PrintDialog({
   bitmapHeight,
   printerStatus,
   labelSettings,
+  printRows,
   onPrint,
+  onBatchPrint,
   onClose,
 }: PrintDialogProps) {
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
@@ -32,17 +36,74 @@ export function PrintDialog({
   const [printing, setPrinting] = useState(false)
   const [printError, setPrintError] = useState<string | null>(null)
 
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const modalCanvasRef = useRef<HTMLCanvasElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [displayDims, setDisplayDims] = useState({ w: 0, h: 0 })
+  const toggle = useCallback(() => setExpanded((v) => !v), [])
+
+  function drawOnCanvas(canvas: HTMLCanvasElement, maxW: number, maxH: number) {
+    if (!currentBitmap || bitmapWidth <= 0 || bitmapHeight <= 0) return
+    const scale = Math.min(maxW / bitmapWidth, maxH / bitmapHeight, 4)
+    const dw = Math.round(bitmapWidth * scale)
+    const dh = Math.round(bitmapHeight * scale)
+    canvas.width = bitmapWidth
+    canvas.height = bitmapHeight
+    canvas.style.width = `${dw}px`
+    canvas.style.height = `${dh}px`
+    const imageData = bitmapToImageData(currentBitmap, bitmapWidth, bitmapHeight)
+    const ctx = canvas.getContext('2d')!
+    ctx.putImageData(imageData, 0, 0)
+    ctx.save()
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)'
+    ctx.lineWidth = Math.max(1, Math.round(3 / scale))
+    ctx.setLineDash([])
+    ctx.beginPath()
+    if (labelSettings.orientation === 'portrait') {
+      ctx.moveTo(1, 0); ctx.lineTo(1, bitmapHeight)
+    } else {
+      ctx.moveTo(0, 1); ctx.lineTo(bitmapWidth, 1)
+    }
+    ctx.stroke()
+    ctx.restore()
+    return { dw, dh }
+  }
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      const dims = drawOnCanvas(canvasRef.current, 440, 280)
+      if (dims) setDisplayDims({ w: dims.dw, h: dims.dh })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentBitmap, bitmapWidth, bitmapHeight])
+
+  useEffect(() => {
+    if (expanded && modalCanvasRef.current) {
+      drawOnCanvas(modalCanvasRef.current, window.innerWidth * 0.85, window.innerHeight * 0.85)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, currentBitmap, bitmapWidth, bitmapHeight])
+
+  const isBatchMode = printRows !== undefined && printRows.length > 0
   const canPrint = printerStatus.connected && currentBitmap !== null && !printing
 
   const handlePrint = async () => {
     setPrintError(null)
     setPrinting(true)
     try {
-      await onPrint(variableValues, {
-        density,
-        quantity,
-        labelType: labelSettings.labelType,
-      })
+      if (isBatchMode && onBatchPrint) {
+        await onBatchPrint(printRows, {
+          density,
+          quantity: 1,
+          labelType: labelSettings.labelType,
+        })
+      } else {
+        await onPrint(variableValues, {
+          density,
+          quantity,
+          labelType: labelSettings.labelType,
+        })
+      }
     } catch (e) {
       setPrintError(e instanceof Error ? e.message : 'Print failed')
     } finally {
@@ -68,18 +129,37 @@ export function PrintDialog({
           </div>
 
           {/* Bitmap preview */}
-          <div className="flex flex-col gap-1">
-            <BitmapPreview
-              bitmap={currentBitmap}
-              width={bitmapWidth}
-              height={bitmapHeight}
-              labelSize={template.label_size}
-            />
-            <p className="text-xs text-gray-500 text-center">This is exactly what will be printed</p>
+          <div className="flex flex-col gap-1 items-center">
+            {currentBitmap ? (
+              <div
+                className="border border-white/10 cursor-zoom-in"
+                style={{
+                  lineHeight: 0,
+                  borderRadius: labelSettings.cornerStyle === 'rounded' ? Math.round(Math.min(displayDims.w, displayDims.h) * 0.08) : 4,
+                  overflow: 'hidden',
+                }}
+                onClick={toggle}
+                title="Click to expand"
+              >
+                <canvas ref={canvasRef} style={{ imageRendering: 'pixelated', display: 'block' }} />
+              </div>
+            ) : (
+              <div className="text-xs text-gray-500 py-4">No preview available</div>
+            )}
+            <p className="text-xs text-gray-500">This is exactly what will be printed</p>
           </div>
 
-          {/* Variables */}
-          {template.variables.length > 0 && (
+          {expanded && (
+            <div
+              className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] cursor-zoom-out"
+              onClick={toggle}
+            >
+              <canvas ref={modalCanvasRef} style={{ imageRendering: 'pixelated', display: 'block' }} />
+            </div>
+          )}
+
+          {/* Variables - only shown in single mode */}
+          {!isBatchMode && template.variables.length > 0 && (
             <div className="flex flex-col gap-2">
               <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Variables</span>
               {template.variables.map((v) => (
@@ -112,17 +192,26 @@ export function PrintDialog({
                 className="flex-1"
               />
             </div>
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-gray-300 w-24 shrink-0">Quantity</label>
-              <input
-                type="number"
-                min={1}
-                max={99}
-                value={quantity}
-                onChange={(e) => setQuantity(Math.min(99, Math.max(1, Number(e.target.value))))}
-                className="w-20 bg-[#1a1a1a] border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
-              />
-            </div>
+            {isBatchMode ? (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-300 w-24 shrink-0">Batch</span>
+                <span className="text-xs text-blue-300">
+                  {printRows.length} label{printRows.length !== 1 ? 's' : ''} (one per row)
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-gray-300 w-24 shrink-0">Quantity</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.min(99, Math.max(1, Number(e.target.value))))}
+                  className="w-20 bg-[#1a1a1a] border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
           </div>
 
           {printError && (
@@ -142,7 +231,9 @@ export function PrintDialog({
             disabled={!canPrint}
             className="text-xs px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors font-medium"
           >
-            {printing ? 'Printing...' : 'Print'}
+            {printing
+              ? 'Printing...'
+              : (isBatchMode ? `Print ${printRows.length} labels` : 'Print')}
           </button>
         </div>
       </div>
