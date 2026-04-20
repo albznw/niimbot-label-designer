@@ -1,0 +1,127 @@
+import { NiimbotBluetoothClient, NiimbotSerialClient, ImageEncoder } from '@mmote/niimbluelib'
+import { bitmapToCanvas } from './label-renderer'
+
+export type ConnectionType = 'bluetooth' | 'serial'
+
+export type PrinterStatus = {
+  connected: boolean
+  deviceName: string | null
+  type: ConnectionType | null
+}
+
+export type PrintOptions = {
+  density: number
+  quantity: number
+}
+
+function rotateCanvas90CCW(src: HTMLCanvasElement): HTMLCanvasElement {
+  const dst = document.createElement('canvas')
+  dst.width = src.height
+  dst.height = src.width
+  const ctx = dst.getContext('2d')!
+  ctx.translate(0, src.width)
+  ctx.rotate(-Math.PI / 2)
+  ctx.drawImage(src, 0, 0)
+  return dst
+}
+
+class PrinterClient {
+  private bleClient: NiimbotBluetoothClient | null = null
+  private serialClient: NiimbotSerialClient | null = null
+  private activeType: ConnectionType | null = null
+  private deviceName: string | null = null
+  private disconnectCallback: (() => void) | null = null
+
+  setDisconnectCallback(cb: () => void) {
+    this.disconnectCallback = cb
+  }
+
+  getStatus(): PrinterStatus {
+    const connected =
+      this.activeType === 'bluetooth'
+        ? (this.bleClient?.isConnected() ?? false)
+        : (this.serialClient?.isConnected() ?? false)
+    return {
+      connected: this.activeType !== null && connected,
+      deviceName: this.deviceName,
+      type: this.activeType,
+    }
+  }
+
+  async connectBluetooth(): Promise<string> {
+    if (this.bleClient) {
+      await this.bleClient.disconnect().catch(() => undefined)
+    }
+    this.bleClient = new NiimbotBluetoothClient()
+    this.bleClient.on('disconnect', () => {
+      this.activeType = null
+      this.deviceName = null
+      this.disconnectCallback?.()
+    })
+    const info = await this.bleClient.connect()
+    this.activeType = 'bluetooth'
+    this.deviceName = info.deviceName ?? 'Bluetooth Printer'
+    return this.deviceName
+  }
+
+  async connectSerial(): Promise<string> {
+    if (this.serialClient) {
+      await this.serialClient.disconnect().catch(() => undefined)
+    }
+    this.serialClient = new NiimbotSerialClient()
+    this.serialClient.on('disconnect', () => {
+      this.activeType = null
+      this.deviceName = null
+      this.disconnectCallback?.()
+    })
+    const info = await this.serialClient.connect()
+    this.activeType = 'serial'
+    this.deviceName = info.deviceName ?? 'Serial Printer'
+    return this.deviceName
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.activeType === 'bluetooth' && this.bleClient) {
+      await this.bleClient.disconnect()
+    } else if (this.activeType === 'serial' && this.serialClient) {
+      await this.serialClient.disconnect()
+    }
+    this.activeType = null
+    this.deviceName = null
+  }
+
+  async print(
+    bitmap: Uint8Array,
+    bitmapWidth: number,
+    bitmapHeight: number,
+    options: PrintOptions
+  ): Promise<void> {
+    const client =
+      this.activeType === 'bluetooth' ? this.bleClient : this.serialClient
+    if (!client || !client.isConnected()) {
+      throw new Error('Printer not connected')
+    }
+
+    let canvas = bitmapToCanvas(bitmap, bitmapWidth, bitmapHeight)
+
+    // Landscape label - rotate 90° CCW before encoding
+    if (bitmapWidth > bitmapHeight) {
+      canvas = rotateCanvas90CCW(canvas)
+    }
+
+    const encoded = ImageEncoder.encodeCanvas(canvas)
+
+    const printTask = client.abstraction.newPrintTask('B1', {
+      totalPages: options.quantity,
+      density: options.density,
+    })
+
+    await printTask.printInit()
+    await printTask.printPage(encoded, options.quantity)
+    await printTask.waitForPageFinished()
+    await printTask.waitForFinished()
+    await client.abstraction.printEnd()
+  }
+}
+
+export const printerClient = new PrinterClient()

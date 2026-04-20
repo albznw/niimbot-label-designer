@@ -1,0 +1,11 @@
+{
+  "current_milestone": "DONE",
+  "completed": ["M1", "M2", "M3", "M4", "M5"],
+  "decisions": {
+    "printer_model": "B1",
+    "server_connection": "usb_serial",
+    "storage": "sqlite",
+    "label_sizes": ["50x30", "30x50", "30x30"]
+  },
+  "notes": "M1 complete: React+Vite+Tailwind frontend, FastAPI+SQLite backend, Docker Compose, nginx. Both build clean."
+}
