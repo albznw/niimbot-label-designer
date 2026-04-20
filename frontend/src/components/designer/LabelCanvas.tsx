@@ -1348,9 +1348,11 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       // Approximation: use bounding rect where possible
       try {
         const rect = (node as Konva.Shape).getClientRect({ skipTransform: false })
+        const rx = rect.x - STAGE_PAD
+        const ry = rect.y - STAGE_PAD
         return {
-          vertical: [rect.x, rect.x + rect.width / 2, rect.x + rect.width],
-          horizontal: [rect.y, rect.y + rect.height / 2, rect.y + rect.height],
+          vertical: [rx, rx + rect.width / 2, rx + rect.width],
+          horizontal: [ry, ry + rect.height / 2, ry + rect.height],
         }
       } catch {
         return {
