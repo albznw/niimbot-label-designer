@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { sseClient } from './lib/sse-client'
+import { wsClient } from './lib/ws-client'
+import type { WsEvent, WsStatus } from './lib/ws-client'
+import * as db from './lib/db'
 import type { Template, Variable } from './types/project'
 import type { LabelSize, LabelDisplaySettings } from './types/label'
 import { getCanvasDims, DEFAULT_LABEL_SETTINGS } from './types/label'
-import * as api from './lib/api'
 import { defaultHtmlForSize } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
 import type { PrinterStatus, PrintOptions } from './lib/printer-client'
@@ -26,6 +27,7 @@ import { HtmlEditor } from './components/designer/HtmlEditor'
 import { PrinterPanel } from './components/printer/PrinterPanel'
 import { PrintDialog } from './components/printer/PrintDialog'
 import { PrintHistory } from './components/history/PrintHistory'
+import { WsStatusDot, SettingsPanel } from './components/settings/SettingsPanel'
 
 export function App() {
   const [templates, setTemplates] = useState<Template[]>([])
@@ -45,9 +47,7 @@ export function App() {
   const [modeSwitchNotice, setModeSwitchNotice] = useState<string | null>(null)
   const [canvasNodes, setCanvasNodes] = useState<NodeConfig[]>([])
   const [canvasSelectedIds, setCanvasSelectedIds] = useState<string[]>([])
-  const [labelSettings, setLabelSettings] = useState<LabelDisplaySettings>(
-    DEFAULT_LABEL_SETTINGS
-  )
+  const [labelSettings, setLabelSettings] = useState<LabelDisplaySettings>(DEFAULT_LABEL_SETTINGS)
 
   // Printer state
   const [printerStatus, setPrinterStatus] = useState<PrinterStatus>({
@@ -61,6 +61,11 @@ export function App() {
   const [showLabelSettings, setShowLabelSettings] = useState(false)
   const [showIconModal, setShowIconModal] = useState(false)
   const [printSuccess, setPrintSuccess] = useState<string | null>(null)
+
+  // Backend / WS state
+  const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected')
+  const [backendUrl, setBackendUrl] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
 
   const [toast, setToast] = useState<string | null>(null)
 
@@ -81,36 +86,70 @@ export function App() {
     })
   }, [])
 
-  // Connect SSE queue stream
+  // Persist selected template
   useEffect(() => {
-    sseClient.connect((event) => {
-      if (event.type === 'queue:variables') {
-        if (event.template_id !== selectedTemplateIdRef.current) {
-          setSelectedTemplateId(event.template_id)
-          showToast('Template switched by remote print request')
-        }
-        setPrintRows(event.rows)
-        setActivePrintRow(0)
-        setShowPrintDialog(true)
-      } else if (event.type === 'queue:bitmap') {
-        const binary = atob(event.bitmap_b64)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-        setBitmap(bytes)
-        setBitmapDims({ w: event.width, h: event.height })
-        setShowPrintDialog(true)
+    if (selectedTemplateId) db.setSetting('lastTemplateId', selectedTemplateId)
+  }, [selectedTemplateId])
+
+  // Init: load templates + settings, connect WS if URL configured
+  useEffect(() => {
+    async function init() {
+      const [tpls, lastId, storedUrl] = await Promise.all([
+        db.listTemplates(),
+        db.getSetting('lastTemplateId'),
+        db.getSetting('backendUrl'),
+      ])
+      setTemplates(tpls)
+      if (lastId && tpls.some((t) => t.id === lastId)) setSelectedTemplateId(lastId)
+      if (storedUrl) {
+        setBackendUrl(storedUrl)
+        connectWs(storedUrl)
       }
-    })
-    return () => sseClient.disconnect()
+      setLoadingTemplates(false)
+    }
+    init().catch((e: unknown) =>
+      setError(e instanceof Error ? e.message : 'Failed to load')
+    )
+    return () => wsClient.disconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Load templates on mount
-  useEffect(() => {
-    api.listTemplates()
-      .then(setTemplates)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load templates'))
-      .finally(() => setLoadingTemplates(false))
+  function connectWs(url: string) {
+    const wsUrl = url.replace(/^http/, 'ws') + '/ws/terminal'
+    wsClient.connect(
+      wsUrl,
+      (event: WsEvent) => {
+        if (event.type === 'queue:variables') {
+          if (event.template_id !== selectedTemplateIdRef.current) {
+            setSelectedTemplateId(event.template_id)
+            showToast('Template switched by remote print request')
+          }
+          setPrintRows(event.rows)
+          setActivePrintRow(0)
+          setShowPrintDialog(true)
+        } else if (event.type === 'queue:bitmap') {
+          const binary = atob(event.bitmap_b64)
+          const bytes = new Uint8Array(binary.length)
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+          setBitmap(bytes)
+          setBitmapDims({ w: event.width, h: event.height })
+          setShowPrintDialog(true)
+        }
+      },
+      setWsStatus
+    )
+  }
+
+  const handleSaveBackendUrl = useCallback(async (url: string) => {
+    setBackendUrl(url)
+    await db.setSetting('backendUrl', url)
+    if (url) {
+      connectWs(url)
+    } else {
+      wsClient.disconnect()
+    }
+    setShowSettings(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Reset designer state when template changes
@@ -151,20 +190,21 @@ export function App() {
     mode: 'canvas' | 'html'
   ) => {
     const initialHtml = mode === 'html' ? defaultHtmlForSize(labelSize) : null
-    const template = await api.createTemplate({
+    const template = await db.createTemplate({
       name,
       label_size: labelSize,
       mode,
       html: initialHtml,
       variables: [],
       sub_label: 'bottom',
+      canvas_json: null,
     })
     setTemplates((prev) => [...prev, template])
     setSelectedTemplateId(template.id)
   }, [])
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    await api.deleteTemplate(id)
+    await db.deleteTemplate(id)
     setTemplates((prev) => prev.filter((t) => t.id !== id))
     if (selectedTemplateId === id) setSelectedTemplateId(null)
   }, [selectedTemplateId])
@@ -172,9 +212,7 @@ export function App() {
   const handleCanvasChange = useCallback((json: string) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
-      prev.map((t) =>
-        t.id === selectedTemplateId ? { ...t, canvas_json: json } : t
-      )
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, canvas_json: json } : t)
     )
     const nodes = canvasRef.current?.getNodes() ?? []
     setCanvasNodes(nodes)
@@ -182,23 +220,21 @@ export function App() {
     setCanvasSelectedIds(ids)
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedTemplateId, { canvas_json: json })
+      db.updateTemplate(selectedTemplateId, { canvas_json: json })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
-    }, 1000)
+    }, 500)
   }, [selectedTemplateId])
 
   const handleHtmlChange = useCallback((html: string) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
-      prev.map((t) =>
-        t.id === selectedTemplateId ? { ...t, html } : t
-      )
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, html } : t)
     )
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedTemplateId, { html })
+      db.updateTemplate(selectedTemplateId, { html })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
-    }, 1000)
+    }, 500)
   }, [selectedTemplateId])
 
   const handleBitmapUpdate = useCallback((bmp: Uint8Array, w: number, h: number) => {
@@ -220,15 +256,13 @@ export function App() {
   const handleVariablesChange = useCallback((vars: Variable[]) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
-      prev.map((t) =>
-        t.id === selectedTemplateId ? { ...t, variables: vars } : t
-      )
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, variables: vars } : t)
     )
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedTemplateId, { variables: vars })
+      db.updateTemplate(selectedTemplateId, { variables: vars })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
-    }, 1000)
+    }, 500)
   }, [selectedTemplateId])
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
@@ -241,7 +275,7 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, label_size: size } : t)
     )
-    await api.updateTemplate(selectedTemplateId, { label_size: size })
+    await db.updateTemplate(selectedTemplateId, { label_size: size })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
   }, [selectedTemplateId])
 
@@ -254,7 +288,7 @@ export function App() {
     setModeSwitchNotice(notice)
     setEditorMode(nextMode)
     setBitmap(null)
-    api.updateTemplate(selectedTemplateId, { mode: nextMode })
+    db.updateTemplate(selectedTemplateId, { mode: nextMode })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save mode'))
     setTimeout(() => setModeSwitchNotice(null), 4000)
   }, [editorMode, selectedTemplateId, selectedTemplate])
@@ -308,16 +342,17 @@ export function App() {
     } finally {
       try {
         const pngB64 = await bitmapToPngBase64(bitmap, w, h)
-        await api.savePrintJob({
+        await db.savePrintJob({
           template_id: selectedTemplate.id,
-          variables: printVariables,
+          variables_used: printVariables,
           bitmap_png_b64: pngB64,
           printer_name: printerName,
+          printed_at: new Date().toISOString(),
           success: printError === undefined,
-          error: printError,
+          error: printError ?? null,
         })
       } catch {
-        // History save failure is non-fatal
+        // history save failure is non-fatal
       }
     }
 
@@ -357,6 +392,7 @@ export function App() {
           loading={loadingTemplates}
         />
         <div className="flex-1" />
+        <WsStatusDot status={wsStatus} onClick={() => setShowSettings(true)} />
         <PrinterPanel
           status={printerStatus}
           connecting={connecting}
@@ -397,7 +433,6 @@ export function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Designer */}
         <div className="flex-1 flex overflow-hidden">
           {!selectedTemplate ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">
@@ -405,7 +440,6 @@ export function App() {
             </div>
           ) : (
             <div className="flex flex-1 overflow-hidden">
-              {/* Main editor area */}
               <div className="flex flex-col flex-1 overflow-hidden">
                 {/* Mode toggle + print toolbar */}
                 <div className="flex items-center gap-3 px-3 py-1.5 border-b border-white/10 bg-[#252525] shrink-0">
@@ -474,7 +508,6 @@ export function App() {
                   />
                 )}
 
-                {/* Variable list below editor */}
                 <VariableList
                   variables={selectedTemplate.variables}
                   values={variableValues}
@@ -487,7 +520,7 @@ export function App() {
                 />
               </div>
 
-              {/* Right sidebar - bitmap preview + properties */}
+              {/* Right sidebar */}
               <div className="w-[280px] shrink-0 border-l border-white/10 flex flex-col overflow-hidden bg-[#2a2a2a]">
                 <BitmapPreview
                   bitmap={bitmap}
@@ -547,9 +580,7 @@ export function App() {
         />
       )}
 
-      {showHistory && (
-        <PrintHistory onClose={() => setShowHistory(false)} />
-      )}
+      {showHistory && <PrintHistory onClose={() => setShowHistory(false)} />}
 
       {showIconModal && (
         <IconModal
@@ -572,12 +603,19 @@ export function App() {
               orientation={labelSettings.orientation}
               labelSize={selectedTemplate?.label_size ?? '50x30'}
               onLabelSizeChange={handleLabelSizeChange}
-              onChange={(s) => {
-                setLabelSettings((prev) => ({ ...prev, ...s }))
-              }}
+              onChange={(s) => setLabelSettings((prev) => ({ ...prev, ...s }))}
             />
           </div>
         </div>
+      )}
+
+      {showSettings && (
+        <SettingsPanel
+          backendUrl={backendUrl}
+          wsStatus={wsStatus}
+          onSave={handleSaveBackendUrl}
+          onClose={() => setShowSettings(false)}
+        />
       )}
     </div>
   )

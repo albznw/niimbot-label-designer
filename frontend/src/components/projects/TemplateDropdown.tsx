@@ -80,7 +80,16 @@ export function TemplateDropdown({
 
   return (
     <>
-      <div ref={containerRef} className="relative">
+      <div ref={containerRef} className="relative flex items-center gap-2">
+        {selectedTemplate && (
+          <button
+            className="text-xs font-mono text-gray-500 hover:text-gray-300 transition-colors select-all"
+            title="Click to copy ID"
+            onClick={() => navigator.clipboard.writeText(selectedTemplate.id)}
+          >
+            {selectedTemplate.id}
+          </button>
+        )}
         <button
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2 text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10 max-w-[220px]"
@@ -116,14 +125,17 @@ export function TemplateDropdown({
                           setOpen(false)
                         }}
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm font-medium truncate">{template.name}</span>
-                          <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${MODE_COLORS[template.mode]}`}>
-                            {MODE_LABELS[template.mode]}
-                          </span>
-                          <span className="shrink-0 text-xs text-gray-500">
-                            {LABEL_SIZE_LABELS[template.label_size]}
-                          </span>
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate">{template.name}</span>
+                            <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${MODE_COLORS[template.mode]}`}>
+                              {MODE_LABELS[template.mode]}
+                            </span>
+                            <span className="shrink-0 text-xs text-gray-500">
+                              {LABEL_SIZE_LABELS[template.label_size]}
+                            </span>
+                          </div>
+                          <span className="text-xs font-mono text-gray-600">{template.id}</span>
                         </div>
                         <button
                           className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all text-lg leading-none ml-2 shrink-0"

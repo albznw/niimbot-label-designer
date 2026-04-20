@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import * as api from '../../lib/api'
-import type { PrintJobRecord, PrintHistoryResponse } from '../../lib/api'
+import * as db from '../../lib/db'
+import type { PrintJobRecord, PrintHistoryResponse } from '../../lib/db'
 
 interface PrintHistoryProps {
   onClose: () => void
@@ -32,7 +32,7 @@ export function PrintHistory({ onClose }: PrintHistoryProps) {
     setLoading(true)
     setError(null)
     try {
-      const res: PrintHistoryResponse = await api.getPrintHistory(p)
+      const res: PrintHistoryResponse = await db.getPrintHistory(p)
       setJobs((prev) => (p === 1 ? res.items : [...prev, ...res.items]))
       setTotal(res.total)
       setPage(p)
@@ -78,11 +78,10 @@ export function PrintHistory({ onClose }: PrintHistoryProps) {
             <ul className="divide-y divide-white/5">
               {jobs.map((job) => (
                 <li key={job.id} className="flex gap-3 p-4">
-                  {/* Bitmap thumbnail */}
                   <div className="w-16 h-10 shrink-0 bg-[#1a1a1a] rounded border border-white/10 overflow-hidden flex items-center justify-center">
-                    {job.bitmap_path ? (
+                    {job.bitmap_png_b64 ? (
                       <img
-                        src={api.getBitmapUrl(job.id)}
+                        src={db.getBitmapDataUrl(job) ?? ''}
                         alt="label"
                         className="w-full h-full object-contain"
                         style={{ imageRendering: 'pixelated' }}
@@ -92,7 +91,6 @@ export function PrintHistory({ onClose }: PrintHistoryProps) {
                     )}
                   </div>
 
-                  {/* Details */}
                   <div className="flex-1 min-w-0 flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-300 truncate font-mono">{job.template_id}</span>

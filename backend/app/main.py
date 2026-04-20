@@ -1,38 +1,42 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
-from app.database import create_db_and_tables
-from app.mqtt.client import mqtt_bridge
-from app.routers import history, printer, queue, templates
+from app.routers import queue
+from app.terminal import terminal
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    create_db_and_tables()
-    Path(settings.data_dir, "bitmaps").mkdir(parents=True, exist_ok=True)
-    if settings.mqtt_url:
-        mqtt_bridge.start(settings.mqtt_url)
     yield
-    if settings.mqtt_url:
-        mqtt_bridge.stop()
 
 
-app = FastAPI(title="Niimbot Label Designer API", lifespan=lifespan)
+app = FastAPI(title="Niimbot Print Relay", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(templates.router, prefix="/api")
-app.include_router(history.router, prefix="/api")
-app.include_router(printer.router, prefix="/api")
 app.include_router(queue.router, prefix="/api")
+
+
+@app.websocket("/ws/terminal")
+async def terminal_endpoint(ws: WebSocket) -> None:
+    await ws.accept()
+    await terminal.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        terminal.disconnect()
+
+
+@app.get("/api/status")
+async def status() -> dict[str, bool]:
+    return {"terminal_connected": terminal.connected}
