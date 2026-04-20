@@ -349,9 +349,9 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     )
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
-    const [editingValue] = useState('')
+    const [editingValue, setEditingValue] = useState<string>('')
     const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-    const [, setTextareaStyle] = useState<CSSProperties>({})
+    const [textareaStyle, setTextareaStyle] = useState<CSSProperties>({})
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const pendingImagePosRef = useRef<{ x: number; y: number } | null>(null)
 
@@ -363,6 +363,9 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const copiedNodesRef = useRef<NodeConfig[]>([])
 
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const historyRef = useRef<NodeConfig[][]>([])
+    const historyIndexRef = useRef(-1)
+    const isUndoRedoRef = useRef(false)
     const nodesRef = useRef(nodes)
     const selectedIdsRef = useRef(selectedIds)
     const activeToolRef = useRef(activeTool)
@@ -374,6 +377,19 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
 
     useEffect(() => {
       nodesRef.current = nodes
+    }, [nodes])
+    useEffect(() => {
+      if (isUndoRedoRef.current) {
+        isUndoRedoRef.current = false
+        return
+      }
+      historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1)
+      historyRef.current.push(JSON.parse(JSON.stringify(nodes)))
+      historyIndexRef.current = historyRef.current.length - 1
+      if (historyRef.current.length > 50) {
+        historyRef.current.shift()
+        historyIndexRef.current--
+      }
     }, [nodes])
     useEffect(() => {
       selectedIdsRef.current = selectedIds
@@ -590,6 +606,13 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       }
     }, [])
 
+    const startEdit = useCallback((id: string) => {
+      const node = nodes.find((n) => n.id === id)
+      if (!node || node.type !== 'text') return
+      setEditingNodeId(id)
+      setEditingValue(node.text ?? '')
+    }, [nodes])
+
     const commitEdit = useCallback(() => {
       if (!editingNodeId) return
       updateNode(editingNodeId, { text: editingValue })
@@ -599,8 +622,6 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const cancelEdit = useCallback(() => {
       setEditingNodeId(null)
     }, [])
-    void commitEdit
-    void cancelEdit
 
     useEffect(() => {
       if (!editingNodeId) return
@@ -1115,6 +1136,41 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       const handleKeyDown = (e: KeyboardEvent) => {
         if (isEditableTarget(e.target)) return
         const mod = e.ctrlKey || e.metaKey
+        if (mod && e.shiftKey && e.key.toLowerCase() === 'z') {
+          // Redo
+          if (historyIndexRef.current < historyRef.current.length - 1) {
+            historyIndexRef.current++
+            isUndoRedoRef.current = true
+            setNodes(JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current])) as NodeConfig[])
+          }
+          e.preventDefault()
+          return
+        }
+        if (mod && e.key.toLowerCase() === 'z') {
+          // Undo
+          if (historyIndexRef.current > 0) {
+            historyIndexRef.current--
+            isUndoRedoRef.current = true
+            setNodes(JSON.parse(JSON.stringify(historyRef.current[historyIndexRef.current])) as NodeConfig[])
+          }
+          e.preventDefault()
+          return
+        }
+        if (!mod && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          if (selectedIdsRef.current.length === 0) return
+          const delta = e.shiftKey ? 10 : 1
+          const dx = e.key === 'ArrowLeft' ? -delta : e.key === 'ArrowRight' ? delta : 0
+          const dy = e.key === 'ArrowUp' ? -delta : e.key === 'ArrowDown' ? delta : 0
+          setNodes((prev) =>
+            prev.map((n) =>
+              selectedIdsRef.current.includes(n.id)
+                ? ({ ...n, x: (n.x ?? 0) + dx, y: (n.y ?? 0) + dy } as NodeConfig)
+                : n
+            )
+          )
+          e.preventDefault()
+          return
+        }
         if (mod && e.key.toLowerCase() === 'c') {
           copySelectedInternal()
           e.preventDefault()
@@ -1490,8 +1546,11 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       align={node.align}
                       fill={node.fill}
                       draggable
+                      visible={editingNodeId !== node.id}
                       onClick={(e) => handleSelectNode(node.id, e)}
                       onTap={(e) => handleSelectNode(node.id, e)}
+                      onDblClick={() => startEdit(node.id)}
+                      onDblTap={() => startEdit(node.id)}
                       onDragEnd={(e) => {
                         updateNode(node.id, { x: e.target.x(), y: e.target.y() })
                       }}
@@ -1667,6 +1726,19 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             <Layer ref={guideLayerRef} x={STAGE_PAD} y={STAGE_PAD} listening={false} />
           </Stage>
         </div>
+        {editingNodeId && (
+          <textarea
+            ref={textareaRef}
+            style={textareaStyle}
+            value={editingValue}
+            onChange={(e) => setEditingValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit() }
+            }}
+          />
+        )}
       </div>
     )
   }
