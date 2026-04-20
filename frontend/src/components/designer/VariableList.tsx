@@ -108,11 +108,17 @@ export function VariableList({ variables, values, onChange, onValuesChange, prin
                 >
                   <span className="text-xs font-mono text-white">{`{{${v.name}}}`}</span>
                   <span className={`text-xs px-1 rounded ${TYPE_COLORS[v.type]}`}>{v.type}</span>
-                  {v.default && (
-                    <span className="text-xs text-gray-500 truncate max-w-[80px]" title={v.default}>
-                      = {v.default}
-                    </span>
-                  )}
+                  <input
+                    type={v.type === 'number' ? 'number' : 'text'}
+                    className="flex-1 min-w-0 bg-transparent border-b border-white/10 focus:border-accent text-xs text-gray-400 focus:text-white px-1 py-0.5 focus:outline-none transition-colors"
+                    value={values[v.name] ?? v.default}
+                    onChange={(e) => {
+                      const next = { ...values, [v.name]: e.target.value }
+                      onValuesChange(next)
+                      onChange(variables.map((vv) => vv.name === v.name ? { ...vv, default: e.target.value } : vv))
+                    }}
+                    placeholder={v.name}
+                  />
                   <div className="ml-auto flex gap-1">
                     <button
                       className="text-xs text-gray-500 hover:text-white transition-colors px-1"
@@ -129,27 +135,6 @@ export function VariableList({ variables, values, onChange, onValuesChange, prin
                   </div>
                 </div>
               ))}
-            </div>
-          )}
-
-          {/* Preview values - only shown when not in batch mode */}
-          {variables.length > 0 && !showBatch && (
-            <div className="flex flex-col gap-2">
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Preview values</p>
-              <div className="grid grid-cols-2 gap-2">
-                {variables.map((v) => (
-                  <label key={v.name} className="flex flex-col gap-0.5">
-                    <span className="text-xs text-gray-500 font-mono">{v.name}</span>
-                    <input
-                      type={v.type === 'number' ? 'number' : 'text'}
-                      className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
-                      value={values[v.name] ?? v.default}
-                      onChange={(e) => onValuesChange({ ...values, [v.name]: e.target.value })}
-                      placeholder={v.default || v.name}
-                    />
-                  </label>
-                ))}
-              </div>
             </div>
           )}
 
