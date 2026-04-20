@@ -1,12 +1,5 @@
 import type { LabelSize } from './label'
 
-export interface Project {
-  id: string
-  name: string
-  created_at: string
-  updated_at: string
-}
-
 export interface Variable {
   name: string
   type: 'text' | 'number' | 'url'
@@ -15,7 +8,6 @@ export interface Variable {
 
 export interface Template {
   id: string
-  project_id: string
   name: string
   mode: 'canvas' | 'html'
   canvas_json: string | null

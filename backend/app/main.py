@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import create_db_and_tables
 from app.mqtt.client import mqtt_bridge
-from app.routers import history, printer, projects
+from app.routers import history, printer, templates
 
 
 @asynccontextmanager
@@ -32,6 +32,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(projects.router, prefix="/api")
+app.include_router(templates.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(printer.router, prefix="/api")

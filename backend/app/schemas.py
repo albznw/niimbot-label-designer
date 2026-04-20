@@ -3,22 +3,6 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-# Project schemas
-class ProjectCreate(BaseModel):
-    name: str
-
-
-class ProjectUpdate(BaseModel):
-    name: str
-
-
-class ProjectResponse(BaseModel):
-    id: str
-    name: str
-    created_at: datetime
-    updated_at: datetime
-
-
 # Template schemas
 class TemplateCreate(BaseModel):
     name: str
@@ -42,7 +26,6 @@ class TemplateUpdate(BaseModel):
 
 class TemplateResponse(BaseModel):
     id: str
-    project_id: str
     name: str
     mode: str
     canvas_json: str | None

@@ -1,4 +1,4 @@
-import type { Project, Template } from '../types/project'
+import type { Template } from '../types/project'
 
 const BASE = '/api'
 
@@ -24,29 +24,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-// Projects
-export function listProjects(): Promise<Project[]> {
-  return request<Project[]>('/projects')
-}
-
-export function createProject(name: string): Promise<Project> {
-  return request<Project>('/projects', {
-    method: 'POST',
-    body: JSON.stringify({ name }),
-  })
-}
-
-export function updateProject(id: string, name: string): Promise<Project> {
-  return request<Project>(`/projects/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify({ name }),
-  })
-}
-
-export function deleteProject(id: string): Promise<void> {
-  return request<void>(`/projects/${id}`, { method: 'DELETE' })
-}
-
 // Normalize template: backend stores variables as JSON string, frontend needs array
 function normalizeTemplate(t: Template): Template {
   return {
@@ -65,16 +42,13 @@ function serializeTemplate(data: Partial<Template>): Record<string, unknown> {
 }
 
 // Templates
-export async function listTemplates(projectId: string): Promise<Template[]> {
-  const templates = await request<Template[]>(`/projects/${projectId}/templates`)
+export async function listTemplates(): Promise<Template[]> {
+  const templates = await request<Template[]>('/templates')
   return templates.map(normalizeTemplate)
 }
 
-export async function createTemplate(
-  projectId: string,
-  data: Partial<Template>
-): Promise<Template> {
-  const t = await request<Template>(`/projects/${projectId}/templates`, {
+export async function createTemplate(data: Partial<Template>): Promise<Template> {
+  const t = await request<Template>('/templates', {
     method: 'POST',
     body: JSON.stringify(serializeTemplate(data)),
   })
@@ -82,24 +56,18 @@ export async function createTemplate(
 }
 
 export async function updateTemplate(
-  projectId: string,
   templateId: string,
   data: Partial<Template>
 ): Promise<Template> {
-  const t = await request<Template>(`/projects/${projectId}/templates/${templateId}`, {
+  const t = await request<Template>(`/templates/${templateId}`, {
     method: 'PUT',
     body: JSON.stringify(serializeTemplate(data)),
   })
   return normalizeTemplate(t)
 }
 
-export function deleteTemplate(
-  projectId: string,
-  templateId: string
-): Promise<void> {
-  return request<void>(`/projects/${projectId}/templates/${templateId}`, {
-    method: 'DELETE',
-  })
+export function deleteTemplate(templateId: string): Promise<void> {
+  return request<void>(`/templates/${templateId}`, { method: 'DELETE' })
 }
 
 // Print history

@@ -7,7 +7,6 @@ import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 
 interface TemplateListProps {
-  projectName: string
   templates: Template[]
   selectedTemplateId: string | null
   onSelectTemplate: (id: string) => void
@@ -26,7 +25,6 @@ const MODE_COLORS: Record<'canvas' | 'html', string> = {
 }
 
 export function TemplateList({
-  projectName,
   templates,
   selectedTemplateId,
   onSelectTemplate,
@@ -63,17 +61,16 @@ export function TemplateList({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <div>
-          <h2 className="text-base font-semibold">{projectName}</h2>
-          <p className="text-xs text-gray-500 mt-0.5">{templates.length} template{templates.length !== 1 ? 's' : ''}</p>
-        </div>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <span className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+          Templates
+        </span>
         <Button onClick={() => setShowCreate(true)} size="sm">
-          + New Template
+          + New
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-3">
         {templates.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
             <p className="text-sm">No templates yet.</p>

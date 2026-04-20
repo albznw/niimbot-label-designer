@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Project, Template, Variable } from './types/project'
+import type { Template, Variable } from './types/project'
 import type { LabelSize } from './types/label'
 import { LABEL_DIMS } from './types/label'
 import * as api from './lib/api'
@@ -7,7 +7,6 @@ import { defaultHtmlForSize } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
 import type { PrinterStatus, PrintOptions } from './lib/printer-client'
 import { bitmapToPngBase64 } from './lib/bitmap-utils'
-import { ProjectSidebar } from './components/projects/ProjectSidebar'
 import { TemplateList } from './components/projects/TemplateList'
 import { LabelCanvas } from './components/designer/LabelCanvas'
 import type { LabelCanvasHandle } from './components/designer/LabelCanvas'
@@ -22,12 +21,9 @@ import { PrintHistory } from './components/history/PrintHistory'
 import type { Canvas } from 'fabric'
 
 export function App() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
-  const [loadingProjects, setLoadingProjects] = useState(true)
-  const [loadingTemplates, setLoadingTemplates] = useState(false)
+  const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // Designer state
@@ -60,28 +56,13 @@ export function App() {
     })
   }, [])
 
-  // Load projects on mount
+  // Load templates on mount
   useEffect(() => {
-    api.listProjects()
-      .then(setProjects)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load projects'))
-      .finally(() => setLoadingProjects(false))
-  }, [])
-
-  // Load templates when project changes
-  useEffect(() => {
-    if (!selectedProjectId) {
-      setTemplates([])
-      setSelectedTemplateId(null)
-      return
-    }
-    setLoadingTemplates(true)
-    setSelectedTemplateId(null)
-    api.listTemplates(selectedProjectId)
+    api.listTemplates()
       .then(setTemplates)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load templates'))
       .finally(() => setLoadingTemplates(false))
-  }, [selectedProjectId])
+  }, [])
 
   // Reset designer state when template changes
   useEffect(() => {
@@ -98,26 +79,13 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId])
 
-  const handleCreateProject = useCallback(async (name: string) => {
-    const project = await api.createProject(name)
-    setProjects((prev) => [...prev, project])
-    setSelectedProjectId(project.id)
-  }, [])
-
-  const handleDeleteProject = useCallback(async (id: string) => {
-    await api.deleteProject(id)
-    setProjects((prev) => prev.filter((p) => p.id !== id))
-    if (selectedProjectId === id) setSelectedProjectId(null)
-  }, [selectedProjectId])
-
   const handleCreateTemplate = useCallback(async (
     name: string,
     labelSize: LabelSize,
     mode: 'canvas' | 'html'
   ) => {
-    if (!selectedProjectId) return
     const initialHtml = mode === 'html' ? defaultHtmlForSize(labelSize) : null
-    const template = await api.createTemplate(selectedProjectId, {
+    const template = await api.createTemplate({
       name,
       label_size: labelSize,
       mode,
@@ -127,17 +95,16 @@ export function App() {
     })
     setTemplates((prev) => [...prev, template])
     setSelectedTemplateId(template.id)
-  }, [selectedProjectId])
+  }, [])
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
-    if (!selectedProjectId) return
-    await api.deleteTemplate(selectedProjectId, id)
+    await api.deleteTemplate(id)
     setTemplates((prev) => prev.filter((t) => t.id !== id))
     if (selectedTemplateId === id) setSelectedTemplateId(null)
-  }, [selectedProjectId, selectedTemplateId])
+  }, [selectedTemplateId])
 
   const handleCanvasChange = useCallback((json: string) => {
-    if (!selectedProjectId || !selectedTemplateId) return
+    if (!selectedTemplateId) return
     setTemplates((prev) =>
       prev.map((t) =>
         t.id === selectedTemplateId ? { ...t, canvas_json: json } : t
@@ -145,13 +112,13 @@ export function App() {
     )
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedProjectId, selectedTemplateId, { canvas_json: json })
+      api.updateTemplate(selectedTemplateId, { canvas_json: json })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 1000)
-  }, [selectedProjectId, selectedTemplateId])
+  }, [selectedTemplateId])
 
   const handleHtmlChange = useCallback((html: string) => {
-    if (!selectedProjectId || !selectedTemplateId) return
+    if (!selectedTemplateId) return
     setTemplates((prev) =>
       prev.map((t) =>
         t.id === selectedTemplateId ? { ...t, html } : t
@@ -159,10 +126,10 @@ export function App() {
     )
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedProjectId, selectedTemplateId, { html })
+      api.updateTemplate(selectedTemplateId, { html })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 1000)
-  }, [selectedProjectId, selectedTemplateId])
+  }, [selectedTemplateId])
 
   const handleBitmapUpdate = useCallback((bmp: Uint8Array, w: number, h: number) => {
     setBitmap(bmp)
@@ -175,7 +142,7 @@ export function App() {
   }, [])
 
   const handleVariablesChange = useCallback((vars: Variable[]) => {
-    if (!selectedProjectId || !selectedTemplateId) return
+    if (!selectedTemplateId) return
     setTemplates((prev) =>
       prev.map((t) =>
         t.id === selectedTemplateId ? { ...t, variables: vars } : t
@@ -183,17 +150,16 @@ export function App() {
     )
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      api.updateTemplate(selectedProjectId, selectedTemplateId, { variables: vars })
+      api.updateTemplate(selectedTemplateId, { variables: vars })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 1000)
-  }, [selectedProjectId, selectedTemplateId])
+  }, [selectedTemplateId])
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
   const dims = selectedTemplate ? LABEL_DIMS[selectedTemplate.label_size] : { w: 0, h: 0 }
 
   const handleSwitchMode = useCallback(() => {
-    if (!selectedProjectId || !selectedTemplateId || !selectedTemplate) return
+    if (!selectedTemplateId || !selectedTemplate) return
     const nextMode = editorMode === 'canvas' ? 'html' : 'canvas'
     const notice = nextMode === 'html'
       ? 'Switching to HTML mode will not carry over canvas elements.'
@@ -201,10 +167,10 @@ export function App() {
     setModeSwitchNotice(notice)
     setEditorMode(nextMode)
     setBitmap(null)
-    api.updateTemplate(selectedProjectId, selectedTemplateId, { mode: nextMode })
+    api.updateTemplate(selectedTemplateId, { mode: nextMode })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save mode'))
     setTimeout(() => setModeSwitchNotice(null), 4000)
-  }, [editorMode, selectedProjectId, selectedTemplateId, selectedTemplate])
+  }, [editorMode, selectedTemplateId, selectedTemplate])
 
   // Printer handlers
   const handleConnectBLE = useCallback(async () => {
@@ -253,7 +219,6 @@ export function App() {
       printError = e instanceof Error ? e.message : 'Print failed'
       throw e
     } finally {
-      // Save to history regardless of outcome
       try {
         const pngB64 = await bitmapToPngBase64(bitmap, w, h)
         await api.savePrintJob({
@@ -308,34 +273,14 @@ export function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar - project list */}
-        {loadingProjects ? (
-          <div className="w-[250px] shrink-0 bg-[#2a2a2a] border-r border-white/10 flex items-center justify-center">
-            <span className="text-sm text-gray-500">Loading...</span>
-          </div>
-        ) : (
-          <ProjectSidebar
-            projects={projects}
-            selectedId={selectedProjectId}
-            onSelect={setSelectedProjectId}
-            onCreate={handleCreateProject}
-            onDelete={handleDeleteProject}
-          />
-        )}
-
-        {/* Middle - template list */}
+        {/* Left sidebar - template list */}
         <div className="w-[300px] shrink-0 border-r border-white/10 flex flex-col overflow-hidden">
-          {!selectedProject ? (
+          {loadingTemplates ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">
-              <p className="text-sm">Select a project</p>
-            </div>
-          ) : loadingTemplates ? (
-            <div className="flex-1 flex items-center justify-center text-gray-500">
-              <p className="text-sm">Loading...</p>
+              <span className="text-sm">Loading...</span>
             </div>
           ) : (
             <TemplateList
-              projectName={selectedProject.name}
               templates={templates}
               selectedTemplateId={selectedTemplateId}
               onSelectTemplate={setSelectedTemplateId}
@@ -349,9 +294,7 @@ export function App() {
         <div className="flex-1 flex overflow-hidden">
           {!selectedTemplate ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">
-              <p className="text-sm">
-                {selectedProject ? 'Select a template to open the designer' : 'Select a project to get started'}
-              </p>
+              <p className="text-sm">Select a template to open the designer</p>
             </div>
           ) : (
             <div className="flex flex-1 overflow-hidden">
