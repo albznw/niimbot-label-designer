@@ -7,7 +7,7 @@ import { defaultHtmlForSize } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
 import type { PrinterStatus, PrintOptions } from './lib/printer-client'
 import { bitmapToPngBase64 } from './lib/bitmap-utils'
-import { TemplateList } from './components/projects/TemplateList'
+import { TemplateDropdown } from './components/projects/TemplateDropdown'
 import { LabelCanvas } from './components/designer/LabelCanvas'
 import type { LabelCanvasHandle, NodeConfig } from './components/designer/LabelCanvas'
 import { ToolSidebar } from './components/designer/ToolSidebar'
@@ -314,6 +314,14 @@ export function App() {
       <header className="flex items-center gap-3 px-5 py-3 border-b border-white/10 bg-[#2a2a2a] shrink-0">
         <h1 className="text-sm font-semibold tracking-wide">Niimbot Label Designer</h1>
         <span className="text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded font-mono">M4</span>
+        <TemplateDropdown
+          templates={templates}
+          selectedTemplateId={selectedTemplateId}
+          onSelectTemplate={setSelectedTemplateId}
+          onCreate={handleCreateTemplate}
+          onDelete={handleDeleteTemplate}
+          loading={loadingTemplates}
+        />
         <div className="flex-1" />
         <PrinterPanel
           status={printerStatus}
@@ -350,24 +358,7 @@ export function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar - template list */}
-        <div className="w-[300px] shrink-0 border-r border-white/10 flex flex-col overflow-hidden">
-          {loadingTemplates ? (
-            <div className="flex-1 flex items-center justify-center text-gray-500">
-              <span className="text-sm">Loading...</span>
-            </div>
-          ) : (
-            <TemplateList
-              templates={templates}
-              selectedTemplateId={selectedTemplateId}
-              onSelectTemplate={setSelectedTemplateId}
-              onCreate={handleCreateTemplate}
-              onDelete={handleDeleteTemplate}
-            />
-          )}
-        </div>
-
-        {/* Right - designer */}
+        {/* Designer */}
         <div className="flex-1 flex overflow-hidden">
           {!selectedTemplate ? (
             <div className="flex-1 flex items-center justify-center text-gray-500">
