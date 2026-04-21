@@ -471,16 +471,19 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         guideLayer.visible(false)
       }
 
-      // Temporarily substitute variables in text nodes
-      const restores: Array<{ node: Konva.Text; original: string }> = []
+      // Temporarily substitute variables in text nodes and restore actual fill color
+      // (preview overrides fill with a green tint for variable-containing nodes)
+      const restores: Array<{ node: Konva.Text; original: string; fill: string }> = []
       stage.find('Text').forEach((k) => {
         const t = k as Konva.Text
         const original = t.text() ?? ''
         const substituted = applyVariables(original, vars)
-        if (substituted !== original) {
-          restores.push({ node: t, original })
-          t.text(substituted)
-        }
+        const currentFill = t.fill() as string
+        const nodeConfig = nodesRef.current.find((n) => n.id === t.id() && n.type === 'text') as Extract<NodeConfig, { type: 'text' }> | undefined
+        const actualFill = nodeConfig?.fill ?? currentFill
+        restores.push({ node: t, original, fill: currentFill })
+        if (substituted !== original) t.text(substituted)
+        if (actualFill !== currentFill) t.fill(actualFill)
       })
       // Disable rounded corners so bitmap has no black corner pixels
       const layer = layerRef.current
@@ -514,7 +517,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       const { bitmap } = canvasTo1BitBitmap(srcCanvas, w, h, imageRegions)
 
       // Restore
-      restores.forEach(({ node, original }) => node.text(original))
+      restores.forEach(({ node, original, fill }) => { node.text(original); node.fill(fill) })
       if (transformer && transformerWasVisible) {
         transformer.visible(true)
       }
