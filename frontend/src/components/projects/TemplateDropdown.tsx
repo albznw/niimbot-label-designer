@@ -13,6 +13,7 @@ interface TemplateDropdownProps {
   onCreate: (name: string, labelSize: LabelSize, mode: 'canvas' | 'html') => Promise<void>
   onDelete: (id: string) => Promise<void>
   onRename: (id: string, name: string) => Promise<void>
+  onImport: (data: Omit<Template, 'id' | 'created_at' | 'updated_at'>) => Promise<void>
   loading: boolean
 }
 
@@ -33,6 +34,7 @@ export function TemplateDropdown({
   onCreate,
   onDelete,
   onRename,
+  onImport,
   loading,
 }: TemplateDropdownProps) {
   const [open, setOpen] = useState(false)
@@ -46,6 +48,7 @@ export function TemplateDropdown({
   const [renameValue, setRenameValue] = useState('')
 
   const containerRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId)
 
@@ -87,11 +90,80 @@ export function TemplateDropdown({
     setRenameValue('')
   }
 
+  const handleExport = (template: Template, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const json = JSON.stringify(template, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${template.name}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setOpen(false)
+  }
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Reset so the same file can be re-imported
+    if (fileInputRef.current) fileInputRef.current.value = ''
+
+    try {
+      const text = await file.text()
+      const parsed: unknown = JSON.parse(text)
+
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        typeof (parsed as Record<string, unknown>).name !== 'string' ||
+        ((parsed as Record<string, unknown>).mode !== 'canvas' && (parsed as Record<string, unknown>).mode !== 'html') ||
+        typeof (parsed as Record<string, unknown>).label_size !== 'string' ||
+        !('canvas_json' in parsed) ||
+        !('html' in parsed) ||
+        !Array.isArray((parsed as Record<string, unknown>).variables) ||
+        !Array.isArray((parsed as Record<string, unknown>).print_rows) ||
+        !('sub_label' in parsed) ||
+        !('variable_text' in parsed)
+      ) {
+        console.error('Invalid template file: missing required fields')
+        return
+      }
+
+      const raw = parsed as Record<string, unknown>
+      const data: Omit<Template, 'id' | 'created_at' | 'updated_at'> = {
+        name: raw.name as string,
+        mode: raw.mode as 'canvas' | 'html',
+        label_size: raw.label_size as LabelSize,
+        canvas_json: raw.canvas_json as string | null,
+        html: raw.html as string | null,
+        variables: raw.variables as Template['variables'],
+        print_rows: raw.print_rows as Record<string, string>[],
+        sub_label: raw.sub_label as 'top' | 'bottom',
+        variable_text: raw.variable_text as string | null,
+      }
+
+      await onImport(data)
+      setOpen(false)
+    } catch (err) {
+      console.error('Failed to import template:', err)
+    }
+  }
+
   const confirmTarget = templates.find((t) => t.id === confirmDeleteId)
   const renameTarget = templates.find((t) => t.id === renamingId)
 
   return (
     <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={(e) => void handleImportFile(e)}
+      />
+
       <div ref={containerRef} className="relative flex items-center gap-2">
         <button
           onClick={() => setOpen((v) => !v)}
@@ -151,6 +223,13 @@ export function TemplateDropdown({
                         </div>
                         <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 ml-2 shrink-0 transition-all">
                           <button
+                            className="text-gray-500 hover:text-green-400 transition-colors text-xs px-1"
+                            onClick={(e) => handleExport(template, e)}
+                            title="Export template"
+                          >
+                            ↓
+                          </button>
+                          <button
                             className="text-gray-500 hover:text-blue-400 transition-colors text-xs px-1"
                             onClick={(e) => {
                               e.stopPropagation()
@@ -187,6 +266,12 @@ export function TemplateDropdown({
                     className="w-full text-left px-3 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
                   >
                     + New Template
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full text-left px-3 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5 transition-colors border-t border-white/5"
+                  >
+                    ↑ Import Template
                   </button>
                 </div>
               </>

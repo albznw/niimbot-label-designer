@@ -38,6 +38,9 @@ interface ObjState {
   // line
   lineLength: number
   lineAngle: number
+  // text height
+  heightMode: 'auto' | 'manual'
+  verticalAlign: string
   // qr / barcode
   content: string
   errorCorrectionLevel: 'L' | 'M' | 'Q' | 'H'
@@ -78,6 +81,8 @@ function readState(node: NodeConfig | null): ObjState {
     radiusY: 0,
     ditherAlgorithm: 'threshold' as const,
     ditherThreshold: 128,
+    heightMode: 'auto' as const,
+    verticalAlign: 'top',
     lineLength: 100,
     lineAngle: 0,
     content: '',
@@ -97,7 +102,9 @@ function readState(node: NodeConfig | null): ObjState {
     return {
       ...base,
       width: Math.round(node.width ?? 0),
-      height: 0,
+      height: node.heightMode === 'manual' && node.height ? Math.round(node.height) : 0,
+      heightMode: node.heightMode ?? 'auto',
+      verticalAlign: node.verticalAlign ?? 'top',
       text: node.text ?? '',
       fontSize: node.fontSize ?? 20,
       fontWeight: bold ? 'bold' : 'normal',
@@ -224,6 +231,9 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
         nodePatch.fontFamily = next.fontFamily
         nodePatch.align = next.textAlign
         nodePatch.fill = next.fill
+        nodePatch.heightMode = next.heightMode
+        nodePatch.height = next.heightMode === 'manual' ? next.height : undefined
+        nodePatch.verticalAlign = next.heightMode === 'manual' ? next.verticalAlign : undefined
       }
 
       if (single.type === 'rect') {
@@ -394,6 +404,47 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               </button>
             ))}
           </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">Height</span>
+            <div className="flex gap-1">
+              {(['auto', 'manual'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  className={`flex-1 py-1 rounded text-xs border transition-colors ${state.heightMode === mode ? 'border-accent bg-accent/20 text-white' : 'border-white/20 text-gray-400 hover:border-white/40'}`}
+                  onClick={() => apply({ heightMode: mode })}
+                >
+                  {mode[0].toUpperCase() + mode.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {state.heightMode === 'manual' && (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-400">Height</span>
+                <input
+                  type="number"
+                  className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
+                  value={state.height}
+                  min={4}
+                  onChange={(e) => apply({ height: Number(e.target.value) })}
+                />
+              </label>
+              <div className="flex gap-1">
+                {(['top', 'middle', 'bottom'] as const).map((a) => (
+                  <button
+                    key={a}
+                    className={`flex-1 py-1 rounded text-xs border transition-colors ${state.verticalAlign === a ? 'border-accent bg-accent/20 text-white' : 'border-white/20 text-gray-400 hover:border-white/40'}`}
+                    onClick={() => apply({ verticalAlign: a })}
+                  >
+                    {a[0].toUpperCase() + a.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       )}
 
@@ -450,7 +501,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               />
             </label>
           ))}
-          {!isCircle && !isLine && (
+          {!isCircle && !isLine && !isText && (
             <>
               <label className="flex flex-col gap-1">
                 <span className="text-xs text-gray-400">W</span>
@@ -471,6 +522,17 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 />
               </label>
             </>
+          )}
+          {!isCircle && !isLine && isText && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-gray-400">W</span>
+              <input
+                type="number"
+                className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                value={state.width}
+                onChange={(e) => apply({ width: Number(e.target.value) })}
+              />
+            </label>
           )}
           {isCircle && (
             <>

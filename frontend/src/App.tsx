@@ -73,7 +73,7 @@ export function App() {
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const varSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const textSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const selectedTemplateIdRef = useRef(selectedTemplateId)
   useEffect(() => { selectedTemplateIdRef.current = selectedTemplateId }, [selectedTemplateId])
   const bitmapResolverRef = useRef<((bmp: Uint8Array, w: number, h: number) => void) | null>(null)
@@ -196,6 +196,8 @@ export function App() {
       variables: [],
       sub_label: 'bottom',
       canvas_json: null,
+      print_rows: [],
+      variable_text: null,
     })
     setTemplates((prev) => [...prev, template])
     setSelectedTemplateId(template.id)
@@ -211,6 +213,11 @@ export function App() {
     setTemplates((prev) => prev.map((t) => t.id === id ? { ...t, name } : t))
     await db.updateTemplate(id, { name })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to rename'))
+  }, [])
+  const handleImportTemplate = useCallback(async (data: Omit<Template, 'id' | 'created_at' | 'updated_at'>) => {
+    const template = await db.createTemplate(data)
+    setTemplates((prev) => [...prev, template])
+    setSelectedTemplateId(template.id)
   }, [])
 
   const handleCanvasChange = useCallback((json: string) => {
@@ -482,6 +489,7 @@ export function App() {
           onCreate={handleCreateTemplate}
           onDelete={handleDeleteTemplate}
           onRename={handleRenameTemplate}
+          onImport={handleImportTemplate}
           loading={loadingTemplates}
         />
         <div className="flex-1" />
@@ -713,7 +721,6 @@ export function App() {
               density={labelSettings.density}
               cornerStyle={labelSettings.cornerStyle}
               orientation={labelSettings.orientation}
-                  cornerStyle={labelSettings.cornerStyle}
               labelSize={selectedTemplate?.label_size ?? '50x30'}
               onLabelSizeChange={handleLabelSizeChange}
               onChange={(s) => setLabelSettings((prev) => ({ ...prev, ...s }))}

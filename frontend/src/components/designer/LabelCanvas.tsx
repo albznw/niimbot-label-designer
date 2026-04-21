@@ -49,6 +49,9 @@ export type NodeConfig =
       fontFamily: string
       align: string
       fill: string
+      height?: number
+      heightMode?: 'auto' | 'manual'
+      verticalAlign?: string
     }
   | {
       id: string
@@ -277,9 +280,10 @@ interface ImageNodeProps {
   onSelect: (e: Konva.KonvaEventObject<Event>) => void
   onChange: (patch: Partial<NodeConfig>) => void
   shapeRef: (n: Konva.Node | null) => void
+  onTransform?: (e: Konva.KonvaEventObject<Event>) => void
 }
 
-function ImageNode({ node, onSelect, onChange, shapeRef }: ImageNodeProps) {
+function ImageNode({ node, onSelect, onChange, shapeRef, onTransform }: ImageNodeProps) {
   const image = useImage(node.src)
   const localRef = useRef<Konva.Image>(null)
   useEffect(() => {
@@ -302,6 +306,7 @@ function ImageNode({ node, onSelect, onChange, shapeRef }: ImageNodeProps) {
       onDragEnd={(e) => {
         onChange({ x: e.target.x(), y: e.target.y() })
       }}
+      onTransform={onTransform}
       onTransformEnd={(e) => {
         const n = e.target
         const sx = n.scaleX()
@@ -1201,6 +1206,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         const tag = el.tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
         if (el.isContentEditable) return true
+        if (el.closest('.monaco-editor')) return true
         return false
       }
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -1242,6 +1248,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
           return
         }
         if (mod && e.key.toLowerCase() === 'c') {
+          if (window.getSelection()?.toString()) return
           copySelectedInternal()
           e.preventDefault()
           return
@@ -1480,6 +1487,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         const vSources: number[] = [0, dims.w / 2, dims.w]
         const hSources: number[] = [0, dims.h / 2, dims.h]
         nodesRef.current.forEach((n) => {
+          if (n.id === draggedId) return
           if (ids.includes(n.id)) return
           const k = nodeRefs.current.get(n.id)
           if (!k) return
@@ -1557,6 +1565,45 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         )
       }
     }, [clearGuides])
+
+    const handleNodeTransform = useCallback((e: Konva.KonvaEventObject<Event>) => {
+      const gl = guideLayerRef.current
+      if (!gl) return
+      gl.destroyChildren()
+
+      const n = e.target as Konva.Shape
+      const currentW = Math.round(Math.abs(n.width() * n.scaleX()))
+      const currentH = Math.round(Math.abs(n.height() * n.scaleY()))
+      const wMm = (currentW / 8).toFixed(1)
+      const hMm = (currentH / 8).toFixed(1)
+
+      const rect = (n as Konva.Shape).getClientRect({ skipTransform: false })
+      const rx = rect.x - STAGE_PAD
+      const ry = rect.y - STAGE_PAD
+
+      const texts = [
+        `W  ${currentW}px  ${wMm}mm`,
+        `H  ${currentH}px  ${hMm}mm`,
+      ]
+
+      const lineH = 13
+      const totalH = texts.length * lineH
+      const yStart = ry + rect.height + 4 + totalH > dims.h ? ry - 4 - totalH : ry + rect.height + 4
+
+      texts.forEach((text, i) => {
+        const lbl = new Konva.Text({
+          text,
+          fontSize: 10,
+          fontFamily: 'monospace',
+          fill: '#facc15',
+          listening: false,
+        })
+        gl.add(lbl)
+        lbl.x(rx + rect.width / 2 - lbl.width() / 2)
+        lbl.y(yStart + i * lineH)
+      })
+      gl.batchDraw()
+    }, [dims.h, dims.w])
 
     const containerRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
@@ -1669,6 +1716,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       x={node.x}
                       y={node.y}
                       width={node.width}
+                      {...(node.heightMode === 'manual' && node.height ? { height: node.height } : {})}
+                      {...(node.heightMode === 'manual' ? { verticalAlign: node.verticalAlign ?? 'top' } : {})}
                       rotation={node.rotation}
                       text={node.text}
                       fontSize={node.fontSize}
@@ -1685,18 +1734,32 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onDragEnd={(e) => {
                         updateNode(node.id, { x: e.target.x(), y: e.target.y() })
                       }}
+                      onTransform={handleNodeTransform}
                       onTransformEnd={(e) => {
                         const n = e.target as Konva.Text
                         const sx = n.scaleX()
                         const newWidth = Math.max(20, n.width() * sx)
                         n.scaleX(1)
-                        n.scaleY(1)
-                        updateNode(node.id, {
-                          x: n.x(),
-                          y: n.y(),
-                          width: newWidth,
-                          rotation: n.rotation(),
-                        })
+                        if (node.heightMode === 'manual') {
+                          const newHeight = Math.max(4, n.height() * n.scaleY())
+                          n.scaleY(1)
+                          updateNode(node.id, {
+                            x: n.x(),
+                            y: n.y(),
+                            width: newWidth,
+                            height: newHeight,
+                            rotation: n.rotation(),
+                          })
+                        } else {
+                          n.scaleY(1)
+                          updateNode(node.id, {
+                            x: n.x(),
+                            y: n.y(),
+                            width: newWidth,
+                            rotation: n.rotation(),
+                          })
+                        }
+                        clearGuides()
                       }}
                     />
                   )
@@ -1721,6 +1784,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onDragEnd={(e) => {
                         updateNode(node.id, { x: e.target.x(), y: e.target.y() })
                       }}
+                      onTransform={handleNodeTransform}
                       onTransformEnd={(e) => {
                         const n = e.target as Konva.Rect
                         const sx = n.scaleX()
@@ -1736,6 +1800,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                           height: newHeight,
                           rotation: n.rotation(),
                         })
+                        clearGuides()
                       }}
                     />
                   )
@@ -1760,6 +1825,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onDragEnd={(e) => {
                         updateNode(node.id, { x: e.target.x(), y: e.target.y() })
                       }}
+                      onTransform={handleNodeTransform}
                       onTransformEnd={(e) => {
                         const n = e.target as Konva.Ellipse
                         const sx = n.scaleX()
@@ -1775,6 +1841,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                           radiusY: newRY,
                           rotation: n.rotation(),
                         })
+                        clearGuides()
                       }}
                     />
                   )
@@ -1798,6 +1865,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onDragEnd={(e) => {
                         updateNode(node.id, { x: e.target.x(), y: e.target.y() })
                       }}
+                      onTransform={handleNodeTransform}
                       onTransformEnd={(e) => {
                         const n = e.target as Konva.Line
                         const sx = n.scaleX()
@@ -1815,6 +1883,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                           points: newPts,
                           rotation: n.rotation(),
                         })
+                        clearGuides()
                       }}
                     />
                   )
@@ -1827,6 +1896,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onSelect={(e) => handleSelectNode(node.id, e)}
                       onChange={(patch) => updateNode(node.id, patch)}
                       shapeRef={registerNodeRef(node.id)}
+                      onTransform={handleNodeTransform}
                     />
                   )
                 }
@@ -1838,6 +1908,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                       onSelect={(e) => handleSelectNode(node.id, e)}
                       onChange={(patch) => updateNode(node.id, patch)}
                       shapeRef={registerNodeRef(node.id)}
+                      onTransform={handleNodeTransform}
                     />
                   )
                 }
