@@ -206,7 +206,7 @@ function parseCanvasJson(json: string | null): NodeConfig[] {
 // Compute bounding box of a node in stage coords (axis-aligned, rotation ignored for simplicity)
 function getNodeBBox(node: NodeConfig): { x: number; y: number; width: number; height: number } {
   if (node.type === 'text' || node.type === 'rect' || node.type === 'image' || node.type === 'qr' || node.type === 'barcode') {
-    const h = 'height' in node ? node.height : 0
+    const h = 'height' in node ? (node.height ?? 0) : 0
     const w = 'width' in node ? node.width : 0
     return { x: node.x, y: node.y, width: w, height: h }
   }
