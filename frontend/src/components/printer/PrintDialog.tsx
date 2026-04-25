@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Template } from '../../types/project'
 import type { PrinterStatus, PrintOptions } from '../../lib/printer-client'
+import type { LabelProfile } from '../../types/label'
+import { getEffectivePrintDirection } from '../../types/label'
 import { bitmapToImageData } from '../../lib/label-renderer'
 
 interface PrintDialogProps {
@@ -9,7 +11,7 @@ interface PrintDialogProps {
   bitmapWidth: number
   bitmapHeight: number
   printerStatus: PrinterStatus
-  labelSettings: { labelType: number; density: number; cornerStyle?: 'rect' | 'rounded'; orientation?: 'landscape' | 'portrait' }
+  labelProfile: LabelProfile
   printRows?: Record<string, string>[]
   onPrint: (variableValues: Record<string, string>, options: PrintOptions) => Promise<void>
   onBatchPrint?: (rows: Record<string, string>[], options: PrintOptions) => Promise<void>
@@ -22,7 +24,7 @@ export function PrintDialog({
   bitmapWidth,
   bitmapHeight,
   printerStatus,
-  labelSettings,
+  labelProfile,
   printRows,
   onPrint,
   onBatchPrint,
@@ -31,10 +33,11 @@ export function PrintDialog({
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
     () => Object.fromEntries(template.variables.map((v) => [v.name, v.default]))
   )
-  const [density, setDensity] = useState(labelSettings.density)
+  const [density, setDensity] = useState(template.density)
   const [quantity, setQuantity] = useState(1)
   const [printing, setPrinting] = useState(false)
   const [printError, setPrintError] = useState<string | null>(null)
+  const [printHalf, setPrintHalf] = useState<'both' | 'top' | 'bottom'>('both')
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const modalCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -59,7 +62,8 @@ export function PrintDialog({
     ctx.lineWidth = Math.max(1, Math.round(3 / scale))
     ctx.setLineDash([])
     ctx.beginPath()
-    if (labelSettings.orientation === 'portrait') {
+    const effDir = getEffectivePrintDirection(labelProfile, template.display_orientation)
+    if (effDir === 'left') {
       ctx.moveTo(1, 0); ctx.lineTo(1, bitmapHeight)
     } else {
       ctx.moveTo(0, 1); ctx.lineTo(bitmapWidth, 1)
@@ -95,13 +99,17 @@ export function PrintDialog({
         await onBatchPrint(printRows, {
           density,
           quantity: 1,
-          labelType: labelSettings.labelType,
+          labelType: labelProfile.labelType,
+          printHalf,
+          printDirection: getEffectivePrintDirection(labelProfile, template.display_orientation),
         })
       } else {
         await onPrint(variableValues, {
           density,
           quantity,
-          labelType: labelSettings.labelType,
+          labelType: labelProfile.labelType,
+          printHalf,
+          printDirection: getEffectivePrintDirection(labelProfile, template.display_orientation),
         })
       }
     } catch (e) {
@@ -135,7 +143,7 @@ export function PrintDialog({
                 className="border border-white/10 cursor-zoom-in"
                 style={{
                   lineHeight: 0,
-                  borderRadius: labelSettings.cornerStyle === 'rounded' ? Math.round(Math.min(displayDims.w, displayDims.h) * 0.08) : 4,
+                  borderRadius: template.corner_style === 'rounded' ? Math.round(12 * (displayDims.w / bitmapWidth)) : 4,
                   overflow: 'hidden',
                 }}
                 onClick={toggle}
@@ -192,6 +200,27 @@ export function PrintDialog({
                 className="flex-1"
               />
             </div>
+            {(labelProfile.type === 'double' || labelProfile.type === 'cable') && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-300 w-24 shrink-0">Print</span>
+                <div className="flex gap-1">
+                  {(['both', 'top', 'bottom'] as const).map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      onClick={() => setPrintHalf(opt)}
+                      className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+                        printHalf === opt
+                          ? 'bg-blue-600 text-white border-blue-500'
+                          : 'bg-[#1a1a1a] text-gray-300 border-white/20 hover:bg-[#242424]'
+                      }`}
+                    >
+                      {opt === 'both' ? 'Both' : opt === 'top' ? 'Top' : 'Bottom'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {isBatchMode ? (
               <div className="flex items-center gap-3">
                 <span className="text-xs text-gray-300 w-24 shrink-0">Batch</span>

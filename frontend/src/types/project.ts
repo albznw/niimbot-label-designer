@@ -1,4 +1,4 @@
-import type { LabelSize } from './label'
+import type { LabelCornerStyle, LabelDisplayOrientation } from './label'
 
 export interface Variable {
   name: string
@@ -13,8 +13,10 @@ export interface Template {
   canvas_json: string | null
   html: string | null
   variables: Variable[]
-  label_size: LabelSize
-  sub_label: 'top' | 'bottom'
+  label_profile: string
+  display_orientation: LabelDisplayOrientation
+  corner_style: LabelCornerStyle
+  density: number
   print_rows: Record<string, string>[]
   variable_text: string | null
   created_at: string

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as MonacoType from 'monaco-editor'
-import type { LabelSize } from '../../types/label'
+import { getProfileById } from '../../types/label'
 import { htmlTo1BitBitmap } from '../../lib/html-renderer'
-import { LABEL_DIMS } from '../../types/label'
 
 interface HtmlEditorProps {
   html: string
-  labelSize: LabelSize
+  presetId: string
   variableValues: Record<string, string>
   onChange: (html: string) => void
   onBitmapUpdate: (bitmap: Uint8Array, w: number, h: number) => void
@@ -14,7 +13,7 @@ interface HtmlEditorProps {
 
 export function HtmlEditor({
   html,
-  labelSize,
+  presetId,
   variableValues,
   onChange,
   onBitmapUpdate,
@@ -27,7 +26,8 @@ export function HtmlEditor({
   const triggerRender = (value: string, vars: Record<string, string>) => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(async () => {
-      const { w, h } = LABEL_DIMS[labelSize]
+      const preset = getProfileById(presetId)
+      const { w, h } = preset.canvasSize
       setRendering(true)
       try {
         const result = await htmlTo1BitBitmap(value, w, h, vars)

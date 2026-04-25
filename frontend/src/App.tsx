@@ -3,9 +3,9 @@ import { wsClient } from './lib/ws-client'
 import type { WsEvent, WsStatus } from './lib/ws-client'
 import * as db from './lib/db'
 import type { Template, Variable } from './types/project'
-import type { LabelSize, LabelDisplaySettings } from './types/label'
-import { getCanvasDims, DEFAULT_LABEL_SETTINGS } from './types/label'
-import { defaultHtmlForSize } from './lib/defaults'
+import { getProfileById, DEFAULT_PROFILE_ID, getCanvasDims } from './types/label'
+import type { LabelProfile, LabelDisplayOrientation } from './types/label'
+import { defaultHtmlForProfile } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
 import type { PrinterStatus, PrintOptions } from './lib/printer-client'
 import { bitmapToPngBase64 } from './lib/bitmap-utils'
@@ -47,7 +47,6 @@ export function App() {
   const [modeSwitchNotice, setModeSwitchNotice] = useState<string | null>(null)
   const [canvasNodes, setCanvasNodes] = useState<NodeConfig[]>([])
   const [canvasSelectedIds, setCanvasSelectedIds] = useState<string[]>([])
-  const [labelSettings, setLabelSettings] = useState<LabelDisplaySettings>(DEFAULT_LABEL_SETTINGS)
   const [varPaneOpen, setVarPaneOpen] = useState(true)
 
   // Printer state
@@ -164,7 +163,6 @@ export function App() {
     setModeSwitchNotice(null)
     setCanvasNodes([])
     setCanvasSelectedIds([])
-    setLabelSettings(DEFAULT_LABEL_SETTINGS)
     const rows = selectedTemplate?.print_rows ?? []
     setPrintRows(rows)
     setActivePrintRow(0)
@@ -184,17 +182,19 @@ export function App() {
 
   const handleCreateTemplate = useCallback(async (
     name: string,
-    labelSize: LabelSize,
+    presetId: string,
     mode: 'canvas' | 'html'
   ) => {
-    const initialHtml = mode === 'html' ? defaultHtmlForSize(labelSize) : null
+    const initialHtml = mode === 'html' ? defaultHtmlForProfile(presetId) : null
     const template = await db.createTemplate({
       name,
-      label_size: labelSize,
+      label_profile: presetId,
+      display_orientation: 'landscape',
+      density: 3,
+      corner_style: 'rect',
       mode,
       html: initialHtml,
       variables: [],
-      sub_label: 'bottom',
       canvas_json: null,
       print_rows: [],
       variable_text: null,
@@ -214,6 +214,7 @@ export function App() {
     await db.updateTemplate(id, { name })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to rename'))
   }, [])
+
   const handleImportTemplate = useCallback(async (data: Omit<Template, 'id' | 'created_at' | 'updated_at'>) => {
     const template = await db.createTemplate(data)
     setTemplates((prev) => [...prev, template])
@@ -309,16 +310,28 @@ export function App() {
   }, [selectedTemplateId, flushVarSave])
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
-  const dims = selectedTemplate
-    ? getCanvasDims(selectedTemplate.label_size, labelSettings.orientation)
+  const labelProfile: LabelProfile | null = selectedTemplate ? getProfileById(selectedTemplate.label_profile) : null
+  const dims = labelProfile && selectedTemplate
+    ? getCanvasDims(labelProfile, selectedTemplate.display_orientation)
     : { w: 0, h: 0 }
 
-  const handleLabelSizeChange = useCallback(async (size: LabelSize) => {
+  const handleProfileChange = useCallback(async (presetId: string) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
-      prev.map((t) => t.id === selectedTemplateId ? { ...t, label_size: size } : t)
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, label_profile: presetId } : t)
     )
-    await db.updateTemplate(selectedTemplateId, { label_size: size })
+    await db.updateTemplate(selectedTemplateId, { label_profile: presetId })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
+  }, [selectedTemplateId])
+
+  const handleProjectSettingsChange = useCallback(async (
+    patch: Partial<Pick<Template, 'display_orientation' | 'density' | 'corner_style'>>
+  ) => {
+    if (!selectedTemplateId) return
+    setTemplates((prev) =>
+      prev.map((t) => t.id === selectedTemplateId ? { ...t, ...patch } : t)
+    )
+    await db.updateTemplate(selectedTemplateId, patch)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
   }, [selectedTemplateId])
 
@@ -501,7 +514,7 @@ export function App() {
           onConnectSerial={handleConnectSerial}
           onDisconnect={handleDisconnect}
         />
-        {selectedTemplate && editorMode === 'canvas' && (
+        {selectedTemplate && (
           <button
             onClick={() => setShowLabelSettings(true)}
             className="text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10"
@@ -592,7 +605,8 @@ export function App() {
                       template={selectedTemplate}
                       variableValues={variableValues}
                       activeTool={activeTool}
-                      labelSettings={labelSettings}
+                      labelProfile={labelProfile!}
+                      displayOrientation={selectedTemplate.display_orientation}
                       onCanvasChange={handleCanvasChange}
                       onBitmapUpdate={handleBitmapUpdate}
                       onSelectionChange={handleSelectionChange}
@@ -601,8 +615,8 @@ export function App() {
                   </div>
                 ) : (
                   <HtmlEditor
-                    html={selectedTemplate.html ?? defaultHtmlForSize(selectedTemplate.label_size)}
-                    labelSize={selectedTemplate.label_size}
+                    html={selectedTemplate.html ?? defaultHtmlForProfile(selectedTemplate.label_profile)}
+                    profileId={selectedTemplate.label_profile}
                     variableValues={variableValues}
                     onChange={handleHtmlChange}
                     onBitmapUpdate={handleBitmapUpdate}
@@ -642,9 +656,9 @@ export function App() {
                   bitmap={bitmap}
                   width={bitmapDims.w || dims.w}
                   height={bitmapDims.h || dims.h}
-                  labelSize={selectedTemplate.label_size}
-                  orientation={labelSettings.orientation}
-                  cornerStyle={labelSettings.cornerStyle}
+                  labelProfile={labelProfile!}
+                  displayOrientation={selectedTemplate.display_orientation}
+                  cornerStyle={selectedTemplate.corner_style}
                   printCount={printRows.length > 0 ? printRows.length : 1}
                   activePrintRow={activePrintRow}
                 />
@@ -692,7 +706,7 @@ export function App() {
           bitmapWidth={bitmapDims.w || dims.w}
           bitmapHeight={bitmapDims.h || dims.h}
           printerStatus={printerStatus}
-          labelSettings={labelSettings}
+          labelProfile={labelProfile!}
           printRows={printRows}
           onPrint={handlePrint}
           onBatchPrint={handleBatchPrint}
@@ -717,13 +731,12 @@ export function App() {
               <button onClick={() => setShowLabelSettings(false)} className="text-gray-400 hover:text-white text-lg leading-none">×</button>
             </div>
             <LabelSettings
-              labelType={labelSettings.labelType}
-              density={labelSettings.density}
-              cornerStyle={labelSettings.cornerStyle}
-              orientation={labelSettings.orientation}
-              labelSize={selectedTemplate?.label_size ?? '50x30'}
-              onLabelSizeChange={handleLabelSizeChange}
-              onChange={(s) => setLabelSettings((prev) => ({ ...prev, ...s }))}
+              labelProfile={labelProfile!}
+              displayOrientation={selectedTemplate!.display_orientation}
+              density={selectedTemplate!.density}
+              cornerStyle={selectedTemplate!.corner_style}
+              onProfileChange={handleProfileChange}
+              onChange={handleProjectSettingsChange}
             />
           </div>
         </div>

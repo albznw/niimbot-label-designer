@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Template } from '../../types/project'
-import type { LabelSize } from '../../types/label'
-import { LABEL_SIZE_LABELS } from '../../types/label'
+import { LABEL_PROFILES, DEFAULT_PROFILE_ID } from '../../types/label'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
@@ -10,7 +9,7 @@ interface TemplateDropdownProps {
   templates: Template[]
   selectedTemplateId: string | null
   onSelectTemplate: (id: string) => void
-  onCreate: (name: string, labelSize: LabelSize, mode: 'canvas' | 'html') => Promise<void>
+  onCreate: (name: string, profileId: string, mode: 'canvas' | 'html') => Promise<void>
   onDelete: (id: string) => Promise<void>
   onRename: (id: string, name: string) => Promise<void>
   onImport: (data: Omit<Template, 'id' | 'created_at' | 'updated_at'>) => Promise<void>
@@ -40,7 +39,7 @@ export function TemplateDropdown({
   const [open, setOpen] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
-  const [newSize, setNewSize] = useState<LabelSize>('50x30')
+  const [newProfileId, setNewProfileId] = useState<string>(DEFAULT_PROFILE_ID)
   const [newMode, setNewMode] = useState<'canvas' | 'html'>('canvas')
   const [saving, setSaving] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -67,9 +66,9 @@ export function TemplateDropdown({
     if (!newName.trim()) return
     setSaving(true)
     try {
-      await onCreate(newName.trim(), newSize, newMode)
+      await onCreate(newName.trim(), newProfileId, newMode)
       setNewName('')
-      setNewSize('50x30')
+      setNewProfileId(DEFAULT_PROFILE_ID)
       setNewMode('canvas')
       setShowCreate(false)
       setOpen(false)
@@ -107,7 +106,6 @@ export function TemplateDropdown({
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Reset so the same file can be re-imported
     if (fileInputRef.current) fileInputRef.current.value = ''
 
     try {
@@ -119,12 +117,11 @@ export function TemplateDropdown({
         parsed === null ||
         typeof (parsed as Record<string, unknown>).name !== 'string' ||
         ((parsed as Record<string, unknown>).mode !== 'canvas' && (parsed as Record<string, unknown>).mode !== 'html') ||
-        typeof (parsed as Record<string, unknown>).label_size !== 'string' ||
+        typeof (parsed as Record<string, unknown>).label_profile !== 'string' ||
         !('canvas_json' in parsed) ||
         !('html' in parsed) ||
         !Array.isArray((parsed as Record<string, unknown>).variables) ||
         !Array.isArray((parsed as Record<string, unknown>).print_rows) ||
-        !('sub_label' in parsed) ||
         !('variable_text' in parsed)
       ) {
         console.error('Invalid template file: missing required fields')
@@ -135,12 +132,13 @@ export function TemplateDropdown({
       const data: Omit<Template, 'id' | 'created_at' | 'updated_at'> = {
         name: raw.name as string,
         mode: raw.mode as 'canvas' | 'html',
-        label_size: raw.label_size as LabelSize,
+        label_profile: raw.label_profile as string,
+        display_orientation: (raw.display_orientation as Template['display_orientation']) ?? 'landscape',
+        density: typeof raw.density === 'number' ? raw.density : 3,
         canvas_json: raw.canvas_json as string | null,
         html: raw.html as string | null,
         variables: raw.variables as Template['variables'],
         print_rows: raw.print_rows as Record<string, string>[],
-        sub_label: raw.sub_label as 'top' | 'bottom',
         variable_text: raw.variable_text as string | null,
       }
 
@@ -150,6 +148,8 @@ export function TemplateDropdown({
       console.error('Failed to import template:', err)
     }
   }
+
+  const profileById = (id: string) => LABEL_PROFILES.find((p) => p.id === id)
 
   const confirmTarget = templates.find((t) => t.id === confirmDeleteId)
   const renameTarget = templates.find((t) => t.id === renamingId)
@@ -167,7 +167,7 @@ export function TemplateDropdown({
       <div ref={containerRef} className="relative flex items-center gap-2">
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-2 text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10 max-w-[220px]"
+          className="flex items-center gap-2 text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] rounded transition-colors border border-white/10 max-w-[320px]"
         >
           <span className="truncate">
             {loading ? 'Loading...' : (selectedTemplate?.name ?? 'Select template')}
@@ -185,7 +185,7 @@ export function TemplateDropdown({
         )}
 
         {open && (
-          <div className="absolute top-full left-0 mt-1 z-50 min-w-[240px] bg-[#2a2a2a] border border-white/10 rounded-lg shadow-2xl overflow-hidden">
+          <div className="absolute top-full left-0 mt-1 z-50 min-w-[320px] bg-[#2a2a2a] border border-white/10 rounded-lg shadow-2xl overflow-hidden">
             {loading ? (
               <div className="px-4 py-3 text-xs text-gray-400">Loading...</div>
             ) : (
@@ -216,7 +216,7 @@ export function TemplateDropdown({
                               {MODE_LABELS[template.mode]}
                             </span>
                             <span className="shrink-0 text-xs text-gray-500">
-                              {LABEL_SIZE_LABELS[template.label_size]}
+                              {profileById(template.label_profile)?.name ?? template.label_profile}
                             </span>
                           </div>
                           <span className="text-xs font-mono text-gray-600">{template.id}</span>
@@ -294,22 +294,16 @@ export function TemplateDropdown({
             />
 
             <div className="flex flex-col gap-1">
-              <label className="text-sm text-gray-300">Label size</label>
-              <div className="flex gap-2">
-                {(['50x30', '30x50', '30x30'] as LabelSize[]).map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => setNewSize(size)}
-                    className={`flex-1 py-1.5 rounded text-sm border transition-colors ${
-                      newSize === size
-                        ? 'border-accent bg-accent/20 text-white'
-                        : 'border-white/20 text-gray-400 hover:border-white/40'
-                    }`}
-                  >
-                    {LABEL_SIZE_LABELS[size]}
-                  </button>
+              <label className="text-sm text-gray-300">Label profile</label>
+              <select
+                value={newProfileId}
+                onChange={(e) => setNewProfileId(e.target.value)}
+                className="w-full bg-[#1e1e1e] border border-white/10 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-accent"
+              >
+                {LABEL_PROFILES.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
-              </div>
+              </select>
             </div>
 
             <div className="flex flex-col gap-1">
