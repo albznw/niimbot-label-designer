@@ -17,16 +17,6 @@ export type PrintOptions = {
   printDirection?: 'top' | 'left'
 }
 
-function rotateCanvas90CCW(src: HTMLCanvasElement): HTMLCanvasElement {
-  const dst = document.createElement('canvas')
-  dst.width = src.height
-  dst.height = src.width
-  const ctx = dst.getContext('2d')!
-  ctx.translate(0, src.width)
-  ctx.rotate(-Math.PI / 2)
-  ctx.drawImage(src, 0, 0)
-  return dst
-}
 
 class PrinterClient {
   private bleClient: NiimbotBluetoothClient | null = null
@@ -134,23 +124,9 @@ class PrinterClient {
       }
     }
 
-    let canvas = bitmapToCanvas(workBitmap, workWidth, workHeight)
+    const canvas = bitmapToCanvas(workBitmap, workWidth, workHeight)
 
-    // Rotate 90° CCW before encoding when needed.
-    // Square originals (double label) must rotate when printing full label (top direction),
-    // but NOT when a half-crop has already been applied (crop gives correct dims).
-    const originalIsSquare = bitmapWidth === bitmapHeight
-    const halfCropApplied = workHeight !== bitmapHeight
-
-    const shouldRotate =
-      (workWidth > workHeight && !(originalIsSquare && halfCropApplied)) ||
-      (workWidth === workHeight && options.printDirection === 'top')
-
-    if (shouldRotate) {
-      canvas = rotateCanvas90CCW(canvas)
-    }
-
-    const encoded = ImageEncoder.encodeCanvas(canvas)
+    const encoded = ImageEncoder.encodeCanvas(canvas, options.printDirection ?? 'top')
 
     const printTaskOptions: {
       totalPages: number
