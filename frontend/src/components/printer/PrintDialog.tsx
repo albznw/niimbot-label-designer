@@ -175,6 +175,8 @@ export function PrintDialog({
                   <label className="text-xs text-gray-300 w-24 shrink-0">{v.name}</label>
                   <input
                     type="text"
+                    name={v.name}
+                    autoComplete="off"
                     value={variableValues[v.name] ?? ''}
                     onChange={(e) =>
                       setVariableValues((prev) => ({ ...prev, [v.name]: e.target.value }))
@@ -193,6 +195,7 @@ export function PrintDialog({
               <label className="text-xs text-gray-300 w-24 shrink-0">Density ({density})</label>
               <input
                 type="range"
+                name="density"
                 min={1}
                 max={5}
                 value={density}
@@ -233,6 +236,8 @@ export function PrintDialog({
                 <label className="text-xs text-gray-300 w-24 shrink-0">Quantity</label>
                 <input
                   type="number"
+                  name="quantity"
+                  autoComplete="off"
                   min={1}
                   max={99}
                   value={quantity}

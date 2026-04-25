@@ -68,6 +68,8 @@ export function PrintBatchTable({
         Paste CSV or TSV — first row must be variable names as headers
       </p>
       <textarea
+        name="print-batch-csv"
+        autoComplete="off"
         className="font-mono text-xs bg-[#111] border border-white/10 rounded px-2 py-1.5 text-white resize-y focus:outline-none focus:border-accent"
         rows={6}
         value={csvText}

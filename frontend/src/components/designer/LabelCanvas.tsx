@@ -1664,6 +1664,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         <input
           ref={fileInputRef}
           type="file"
+          name="image-upload"
           accept=".png,.jpg,.jpeg,.svg,image/*"
           style={{ display: 'none' }}
           onChange={handleImageInputChange}
@@ -1982,6 +1983,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         {editingNodeId && (
           <textarea
             ref={textareaRef}
+            name="canvas-text-edit"
+            autoComplete="off"
             style={textareaStyle}
             value={editingValue}
             onChange={(e) => setEditingValue(e.target.value)}

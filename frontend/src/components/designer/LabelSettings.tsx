@@ -31,6 +31,7 @@ export function LabelSettings({
       <label className="flex flex-col gap-1">
         <span className="text-xs text-gray-400">Label profile</span>
         <select
+          name="label-profile"
           className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent"
           value={labelProfile.id}
           onChange={(e) => onProfileChange(e.target.value)}
@@ -107,6 +108,7 @@ export function LabelSettings({
         <span className="text-xs text-gray-400">Density ({density})</span>
         <input
           type="range"
+          name="density"
           min={1}
           max={5}
           value={density}

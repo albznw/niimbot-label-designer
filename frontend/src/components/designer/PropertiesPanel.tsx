@@ -321,6 +321,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">Content</span>
             <textarea
+              name="text-content"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1.5 text-xs text-white resize-none focus:outline-none focus:border-accent"
               rows={3}
               value={state.text}
@@ -332,6 +333,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Font size</span>
             <input
               type="number"
+              name="font-size"
+              autoComplete="off"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
               value={state.fontSize}
               min={6}
@@ -344,6 +347,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Font family</span>
             {fontApiAvailable && localFonts ? (
               <select
+                name="font-family"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
                 value={state.fontFamily}
                 onChange={(e) => apply({ fontFamily: e.target.value })}
@@ -363,6 +367,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             ) : (
               <input
                 type="text"
+                name="font-family"
+                autoComplete="off"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
                 value={state.fontFamily}
                 onChange={(e) => apply({ fontFamily: e.target.value })}
@@ -426,6 +432,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 <span className="text-xs text-gray-400">Height</span>
                 <input
                   type="number"
+                  name="text-height"
+                  autoComplete="off"
                   className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white w-full focus:outline-none focus:border-accent"
                   value={state.height}
                   min={4}
@@ -456,6 +464,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
           <label className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">Content</span>
             <textarea
+              name="qr-content"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1.5 text-xs text-white resize-none focus:outline-none focus:border-accent"
               rows={3}
               value={state.content}
@@ -495,6 +504,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               <span className="text-xs text-gray-400">{label}</span>
               <input
                 type="number"
+                name={key}
+                autoComplete="off"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                 value={state[key]}
                 onChange={(e) => apply({ [key]: Number(e.target.value) })}
@@ -507,6 +518,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 <span className="text-xs text-gray-400">W</span>
                 <input
                   type="number"
+                  name="width"
+                  autoComplete="off"
                   className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   value={state.width}
                   onChange={(e) => apply({ width: Number(e.target.value) })}
@@ -516,6 +529,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 <span className="text-xs text-gray-400">H</span>
                 <input
                   type="number"
+                  name="height"
+                  autoComplete="off"
                   className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   value={state.height}
                   onChange={(e) => apply({ height: Number(e.target.value) })}
@@ -528,6 +543,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               <span className="text-xs text-gray-400">W</span>
               <input
                 type="number"
+                name="width"
+                autoComplete="off"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                 value={state.width}
                 onChange={(e) => apply({ width: Number(e.target.value) })}
@@ -540,6 +557,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 <span className="text-xs text-gray-400">RX</span>
                 <input
                   type="number"
+                  name="radius-x"
+                  autoComplete="off"
                   className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   value={state.radiusX}
                   onChange={(e) => apply({ radiusX: Number(e.target.value) })}
@@ -549,6 +568,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
                 <span className="text-xs text-gray-400">RY</span>
                 <input
                   type="number"
+                  name="radius-y"
+                  autoComplete="off"
                   className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   value={state.radiusY}
                   onChange={(e) => apply({ radiusY: Number(e.target.value) })}
@@ -560,6 +581,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Rotation</span>
             <input
               type="number"
+              name="rotation"
+              autoComplete="off"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
               value={state.rotation}
               min={-180}
@@ -577,6 +600,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Fill</span>
             <input
               type="color"
+              name="fill-color"
               className="w-full h-8 rounded border border-white/20 bg-[#1a1a1a] cursor-pointer"
               value={state.fill}
               onChange={(e) => apply({ fill: e.target.value })}
@@ -586,6 +610,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Stroke</span>
             <input
               type="color"
+              name="stroke-color"
               className="w-full h-8 rounded border border-white/20 bg-[#1a1a1a] cursor-pointer"
               value={state.stroke}
               onChange={(e) => apply({ stroke: e.target.value })}
@@ -595,6 +620,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Stroke width</span>
             <input
               type="number"
+              name="stroke-width"
+              autoComplete="off"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
               value={state.strokeWidth}
               min={0}
@@ -634,6 +661,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Threshold ({state.ditherThreshold})</span>
             <input
               type="range"
+              name="dither-threshold"
               min={0}
               max={255}
               value={state.ditherThreshold}
@@ -652,6 +680,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               <span className="text-xs text-gray-400">Length</span>
               <input
                 type="number"
+                name="line-length"
+                autoComplete="off"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                 value={state.lineLength}
                 min={1}
@@ -662,6 +692,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
               <span className="text-xs text-gray-400">Angle °</span>
               <input
                 type="number"
+                name="line-angle"
+                autoComplete="off"
                 className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                 value={state.lineAngle}
                 min={-180}
@@ -674,6 +706,7 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Color</span>
             <input
               type="color"
+              name="line-color"
               className="w-full h-8 rounded border border-white/20 bg-[#1a1a1a] cursor-pointer"
               value={state.stroke}
               onChange={(e) => apply({ stroke: e.target.value })}
@@ -683,6 +716,8 @@ export function PropertiesPanel({ selectedObject, onUpdate }: PropertiesPanelPro
             <span className="text-xs text-gray-400">Thickness</span>
             <input
               type="number"
+              name="stroke-width"
+              autoComplete="off"
               className="bg-[#1a1a1a] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
               value={state.strokeWidth}
               min={1}

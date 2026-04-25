@@ -160,6 +160,7 @@ export function TemplateDropdown({
       <input
         ref={fileInputRef}
         type="file"
+        name="import-file"
         accept=".json"
         className="hidden"
         onChange={(e) => void handleImportFile(e)}

@@ -108,6 +108,8 @@ export function IconModal({ onSelect, onClose }: IconModalProps) {
           <h2 className="text-sm font-semibold text-white">Icon Picker</h2>
           <input
             type="text"
+            name="icon-search"
+            autoComplete="off"
             placeholder="Search icons..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
