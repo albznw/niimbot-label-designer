@@ -59,10 +59,11 @@ function drawLabelPath(
     }
   } else if (labelProfile.type === 'cable') {
     if (effDir === 'left') {
-      // write area: left half, full height - corners TL, TR, BR, BL
-      roundedRect(ctx, 0, 0, displayW / 2, displayH, [r, 0, r, r])
-      // tail area: right half, top half
-      roundedRect(ctx, displayW / 2, 0, displayW / 2, displayH / 2, [0, r, r, 0])
+      const tailH = Math.round(displayH * 8 / 30)
+      const tailY = Math.round(displayH / 4 - tailH / 2)
+      roundedRect(ctx, 0, 0, displayW / 2, displayH / 2, r)
+      roundedRect(ctx, 0, displayH / 2, displayW / 2, displayH / 2, r)
+      roundedRect(ctx, displayW / 2, tailY, displayW / 2, tailH, [0, r, r, 0])
     } else {
       // write area: bottom half, full width
       roundedRect(ctx, 0, displayH / 2, displayW, displayH / 2, [0, 0, r, r])
@@ -116,13 +117,13 @@ function drawBitmap(
   ctx.restore()
 
   // Step 4 - overlay lines (dividers + print direction indicator)
-  if (labelProfile.type === 'double' || labelProfile.type === 'cable') {
+  if (labelProfile.type === 'double') {
     ctx.save()
     ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)'
     ctx.setLineDash([6, 4])
     ctx.lineWidth = 1
     ctx.beginPath()
-    if (labelProfile.type === 'cable' || effDir === 'top') {
+    if (effDir === 'top') {
       ctx.moveTo(0, Math.round(displayH / 2))
       ctx.lineTo(displayW, Math.round(displayH / 2))
     } else {
@@ -133,14 +134,27 @@ function drawBitmap(
     ctx.restore()
   }
 
-  if (labelProfile.type === 'cable') {
+  if (labelProfile.type === 'cable' && effDir === 'left') {
+    const tailH = Math.round(displayH * 8 / 30)
+    const tailY = Math.round(displayH / 4 - tailH / 2)
     ctx.save()
     ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)'
     ctx.setLineDash([6, 4])
     ctx.lineWidth = 1
+    // horizontal divider between top/bottom labels (left side only)
     ctx.beginPath()
-    ctx.moveTo(Math.round(displayW / 2), 0)
+    ctx.moveTo(0, Math.round(displayH / 2))
     ctx.lineTo(Math.round(displayW / 2), Math.round(displayH / 2))
+    ctx.stroke()
+    // tail top boundary
+    ctx.beginPath()
+    ctx.moveTo(Math.round(displayW / 2), tailY)
+    ctx.lineTo(displayW, tailY)
+    ctx.stroke()
+    // tail bottom boundary
+    ctx.beginPath()
+    ctx.moveTo(Math.round(displayW / 2), tailY + tailH)
+    ctx.lineTo(displayW, tailY + tailH)
     ctx.stroke()
     ctx.restore()
   }

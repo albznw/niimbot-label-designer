@@ -1704,9 +1704,12 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                 // cable
                 const r = isRounded ? CORNER_RADIUS_PX : 0
                 if (effectivePrintDir === 'left') {
+                  const tailH = Math.round(dims.h * 8 / 30)
+                  const tailY = Math.round(dims.h / 4 - tailH / 2)
                   return (<>
-                    <Rect x={0} y={0} width={dims.w / 2} height={dims.h} fill="white" cornerRadius={[r, 0, r, r]} strokeEnabled={false} listening={false} />
-                    <Rect x={dims.w / 2} y={0} width={dims.w / 2} height={dims.h / 2} fill="white" cornerRadius={[0, r, r, 0]} strokeEnabled={false} listening={false} />
+                    <Rect x={0} y={0} width={dims.w / 2} height={dims.h / 2} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                    <Rect x={0} y={dims.h / 2} width={dims.w / 2} height={dims.h / 2} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                    <Rect x={dims.w / 2} y={tailY} width={dims.w / 2} height={tailH} fill="white" cornerRadius={[0, r, r, 0]} strokeEnabled={false} listening={false} />
                   </>)
                 } else {
                   return (<>
@@ -1952,8 +1955,11 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
               {/* Cable label dividers */}
               {labelProfile.type === 'cable' && (
                 effectivePrintDir === 'left' ? (<>
-                  <Line points={[0, dims.h / 2, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
-                  <Line points={[dims.w / 2, 0, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                  {(() => { const tailH = Math.round(dims.h * 8 / 30); const tailY = Math.round(dims.h / 4 - tailH / 2); return (<>
+                    <Line points={[0, dims.h / 2, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                    <Line points={[dims.w / 2, tailY, dims.w, tailY]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                    <Line points={[dims.w / 2, tailY + tailH, dims.w, tailY + tailH]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                  </>) })()}
                 </>) : (<>
                   <Line points={[dims.w / 2, 0, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
                   <Line points={[0, dims.h / 2, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
