@@ -137,7 +137,7 @@ class PrinterClient {
     let canvas = bitmapToCanvas(workBitmap, workWidth, workHeight)
 
     // Landscape label - rotate 90° CCW before encoding
-    if (workWidth > workHeight) {
+    if (bitmapWidth > bitmapHeight) {
       canvas = rotateCanvas90CCW(canvas)
     }
 
