@@ -190,8 +190,6 @@ export function BitmapPreview({
   const modalCanvasRef = useRef<HTMLCanvasElement>(null)
   const [expanded, setExpanded] = useState(false)
 
-  const { w: _canvasW, h: _canvasH } = getCanvasDims(labelProfile, displayOrientation)
-
   const scale = Math.min(MAX_W / width, MAX_H / height, 1)
   const displayW = Math.round(width * scale)
   const displayH = Math.round(height * scale)
@@ -212,6 +210,16 @@ export function BitmapPreview({
       drawBitmap(modalCanvasRef.current, bitmap, width, height, modalW, modalH, labelProfile, displayOrientation, cornerStyle)
     }
   }, [expanded, bitmap, width, height, modalW, modalH, labelProfile, displayOrientation, cornerStyle])
+
+  // Fix #1 - ESC closes expanded modal
+  useEffect(() => {
+    if (!expanded) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [expanded])
 
   const toggle = useCallback(() => setExpanded((v) => !v), [])
 

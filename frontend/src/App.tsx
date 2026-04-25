@@ -776,6 +776,7 @@ export function App() {
           onPrint={handlePrint}
           onBatchPrint={handleBatchPrint}
           onRenderRow={handleRenderRow}
+          initialVariableValues={variableValues}
           onClose={() => setShowPrintDialog(false)}
         />
       )}

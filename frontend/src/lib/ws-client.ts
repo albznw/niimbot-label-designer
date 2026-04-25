@@ -15,6 +15,7 @@ class WsClient {
   private url: string | null = null
   private _status: WsStatus = 'disconnected'
   private intentionalClose = false
+  private reconnectDelay = 1000
 
   private setStatus(s: WsStatus) {
     this._status = s
@@ -45,7 +46,10 @@ class WsClient {
     }
     this.ws = ws
 
-    ws.onopen = () => this.setStatus('connected')
+    ws.onopen = () => {
+      this.reconnectDelay = 1000
+      this.setStatus('connected')
+    }
 
     ws.onmessage = (e) => {
       try {
@@ -66,10 +70,12 @@ class WsClient {
 
   private _scheduleReconnect() {
     if (this.reconnectTimer) return
+    const delay = this.reconnectDelay
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (!this.intentionalClose) this._open()
-    }, 3000)
+    }, delay)
   }
 
   disconnect() {
@@ -82,6 +88,8 @@ class WsClient {
     this.ws?.close()
     this.ws = null
     this.setStatus('disconnected')
+    this.handler = null
+    this.statusHandler = null
   }
 
   reconnectTo(url: string) {

@@ -1,12 +1,23 @@
 import base64
 import io
 import json
+import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+import numpy as np
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class TerminalManager:
@@ -20,13 +31,16 @@ class TerminalManager:
         self.ws = None
 
     async def send(self, data: dict[str, Any]) -> bool:
-        if self.ws is None:
+        ws = self.ws  # capture reference before await
+        if ws is None:
             return False
         try:
-            await self.ws.send_text(json.dumps(data))
+            await ws.send_text(json.dumps(data))
             return True
-        except Exception:
-            self.ws = None
+        except Exception as e:
+            logger.error("WS send error: %s", e)
+            if self.ws is ws:  # only clear if no new client connected in the meantime
+                self.ws = None
             return False
 
     @property
@@ -56,6 +70,9 @@ async def terminal_endpoint(ws: WebSocket) -> None:
             await ws.receive_text()
     except WebSocketDisconnect:
         terminal.disconnect()
+    except Exception as e:
+        logger.error("WS connection error: %s", e)
+        terminal.disconnect()
 
 
 @app.get("/api/status")
@@ -75,11 +92,13 @@ async def queue_print_batch(
     template_id: str,
     rows: list[dict[str, str]],
 ) -> dict[str, int]:
-    sent = await terminal.send({
-        "type": "queue:variables",
-        "template_id": template_id,
-        "rows": rows,
-    })
+    sent = await terminal.send(
+        {
+            "type": "queue:variables",
+            "template_id": template_id,
+            "rows": rows,
+        }
+    )
     if not sent:
         raise HTTPException(status_code=503, detail="No terminal connected")
     return {"queued": len(rows)}
@@ -91,11 +110,13 @@ async def queue_print_single(
     request: Request,
 ) -> dict[str, int]:
     variables = dict(request.query_params)
-    sent = await terminal.send({
-        "type": "queue:variables",
-        "template_id": template_id,
-        "rows": [variables],
-    })
+    sent = await terminal.send(
+        {
+            "type": "queue:variables",
+            "template_id": template_id,
+            "rows": [variables],
+        }
+    )
     if not sent:
         raise HTTPException(status_code=503, detail="No terminal connected")
     return {"queued": 1}
@@ -116,20 +137,18 @@ async def queue_print_image(
         img = img.resize((w, h), Image.LANCZOS)
     img1 = img.convert("1")
     w, h = img1.width, img1.height
-    row_bytes = (w + 7) // 8
-    buf = bytearray(row_bytes * h)
-    for y in range(h):
-        for x in range(w):
-            if img1.getpixel((x, y)) == 0:  # dark pixel
-                buf[y * row_bytes + x // 8] |= 1 << (7 - (x % 8))
-    bitmap_b64 = base64.b64encode(bytes(buf)).decode()
-    sent = await terminal.send({
-        "type": "queue:bitmap",
-        "bitmap_b64": bitmap_b64,
-        "width": w,
-        "height": h,
-        "density": density,
-    })
+    arr = np.array(img1, dtype=np.uint8)  # PIL '1' mode: 0=black, 255=white
+    packed = np.packbits(arr == 0, axis=1)  # 1 where dark pixel, packed MSB-first
+    bitmap_b64 = base64.b64encode(packed.tobytes()).decode()
+    sent = await terminal.send(
+        {
+            "type": "queue:bitmap",
+            "bitmap_b64": bitmap_b64,
+            "width": w,
+            "height": h,
+            "density": density,
+        }
+    )
     if not sent:
         raise HTTPException(status_code=503, detail="No terminal connected")
     return {"queued": 1}
@@ -137,13 +156,15 @@ async def queue_print_image(
 
 @app.post("/api/print", status_code=202)
 async def queue_print_bitmap(body: BitmapPrintRequest) -> dict[str, int]:
-    sent = await terminal.send({
-        "type": "queue:bitmap",
-        "bitmap_b64": body.bitmap_b64,
-        "width": body.width,
-        "height": body.height,
-        "density": body.density,
-    })
+    sent = await terminal.send(
+        {
+            "type": "queue:bitmap",
+            "bitmap_b64": body.bitmap_b64,
+            "width": body.width,
+            "height": body.height,
+            "density": body.density,
+        }
+    )
     if not sent:
         raise HTTPException(status_code=503, detail="No terminal connected")
     return {"queued": 1}

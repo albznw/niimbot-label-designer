@@ -13,11 +13,14 @@ interface PrintDialogProps {
   printerStatus: PrinterStatus
   labelProfile: LabelProfile
   printRows?: Record<string, string>[]
+  initialVariableValues?: Record<string, string>
   onPrint: (variableValues: Record<string, string>, options: PrintOptions) => Promise<void>
   onBatchPrint?: (rows: Record<string, string>[], options: PrintOptions) => Promise<void>
   onRenderRow?: (vars: Record<string, string>) => Promise<{ bitmap: Uint8Array; w: number; h: number }>
   onClose: () => void
 }
+
+const CAROUSEL_MAX = 20
 
 export function PrintDialog({
   template,
@@ -27,13 +30,14 @@ export function PrintDialog({
   printerStatus,
   labelProfile,
   printRows,
+  initialVariableValues,
   onPrint,
   onBatchPrint,
   onRenderRow,
   onClose,
 }: PrintDialogProps) {
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
-    () => Object.fromEntries(template.variables.map((v) => [v.name, v.default]))
+    () => initialVariableValues ?? Object.fromEntries(template.variables.map((v) => [v.name, v.default]))
   )
   const [density, setDensity] = useState(template.density)
   const [quantity, setQuantity] = useState(1)
@@ -57,6 +61,15 @@ export function PrintDialog({
   const [carouselBitmaps, setCarouselBitmaps] = useState<Map<number, { bitmap: Uint8Array; w: number; h: number }>>(new Map())
   const [carouselLoading, setCarouselLoading] = useState(false)
   const carouselCanvasRef = useRef<HTMLCanvasElement>(null)
+
+  // Fix #2 - ESC closes dialog
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
 
   function drawOnCanvas(
     canvas: HTMLCanvasElement,
@@ -115,7 +128,15 @@ export function PrintDialog({
     if (carouselBitmaps.has(carouselIndex)) return
     setCarouselLoading(true)
     onRenderRow(printRows[carouselIndex]).then((result) => {
-      setCarouselBitmaps((prev) => new Map(prev).set(carouselIndex, result))
+      // Fix #4 - cap carouselBitmaps at CAROUSEL_MAX entries
+      setCarouselBitmaps((prev) => {
+        const next = new Map(prev)
+        if (next.size >= CAROUSEL_MAX) {
+          const oldestKey = next.keys().next().value
+          if (oldestKey !== undefined) next.delete(oldestKey)
+        }
+        return next.set(carouselIndex, result)
+      })
       setCarouselLoading(false)
     }).catch(() => setCarouselLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps

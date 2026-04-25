@@ -117,6 +117,19 @@ export function VariableList({
   const suppressRef = useRef(false)
   const dataRef = useRef({ variables, values, printRows })
 
+  // Keep handler refs current so the mount effect never captures stale closures
+  const onChangeRef = useRef(onChange)
+  const onValuesChangeRef = useRef(onValuesChange)
+  const onTextChangeRef = useRef(onTextChange)
+  const onPrintRowsChangeRef = useRef(onPrintRowsChange)
+  const onActivePrintRowChangeRef = useRef(onActivePrintRowChange)
+
+  useEffect(() => { onChangeRef.current = onChange }, [onChange])
+  useEffect(() => { onValuesChangeRef.current = onValuesChange }, [onValuesChange])
+  useEffect(() => { onTextChangeRef.current = onTextChange }, [onTextChange])
+  useEffect(() => { onPrintRowsChangeRef.current = onPrintRowsChange }, [onPrintRowsChange])
+  useEffect(() => { onActivePrintRowChangeRef.current = onActivePrintRowChange }, [onActivePrintRowChange])
+
   // Mount Monaco once
   useEffect(() => {
     if (!containerRef.current) return
@@ -152,24 +165,24 @@ export function VariableList({
       editorRef.current = editor
 
       const parsed = parseCSV(initial)
-      onChange(parsed.variables)
-      onValuesChange(parsed.values)
-      onPrintRowsChange(parsed.printRows)
+      onChangeRef.current(parsed.variables)
+      onValuesChangeRef.current(parsed.values)
+      onPrintRowsChangeRef.current(parsed.printRows)
 
       editor.onDidChangeModelContent(() => {
         if (suppressRef.current) return
         const text = editor.getValue()
-        onTextChange(text)
+        onTextChangeRef.current(text)
         const parsed = parseCSV(text)
-        onChange(parsed.variables)
-        onValuesChange(parsed.values)
-        onPrintRowsChange(parsed.printRows)
+        onChangeRef.current(parsed.variables)
+        onValuesChangeRef.current(parsed.values)
+        onPrintRowsChangeRef.current(parsed.printRows)
       })
 
       editor.onDidChangeCursorPosition((e) => {
         // line 1 = header, lines 2+ = data rows (0-indexed)
         const line = e.position.lineNumber
-        onActivePrintRowChange(Math.max(0, line - 2))
+        onActivePrintRowChangeRef.current(Math.max(0, line - 2))
       })
     })
 
@@ -178,7 +191,6 @@ export function VariableList({
       editorRef.current?.dispose()
       editorRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Keep latest data in a ref so syncKey effect can read it without stale closure

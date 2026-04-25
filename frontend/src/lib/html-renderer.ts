@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas'
 import { canvasTo1BitBitmap } from './label-renderer'
-import { applyVariables } from './canvas-utils'
+import { applyVariables, escapeHtml } from './canvas-utils'
 
 export async function htmlTo1BitBitmap(
   html: string,
@@ -8,7 +8,10 @@ export async function htmlTo1BitBitmap(
   h: number,
   variableValues: Record<string, string>
 ): Promise<{ bitmap: Uint8Array; width: number; height: number }> {
-  const processedHtml = applyVariables(html, variableValues)
+  const escapedValues = Object.fromEntries(
+    Object.entries(variableValues).map(([k, v]) => [k, escapeHtml(v)])
+  )
+  const processedHtml = applyVariables(html, escapedValues)
 
   const iframe = document.createElement('iframe')
   iframe.style.position = 'fixed'
@@ -18,6 +21,7 @@ export async function htmlTo1BitBitmap(
   iframe.style.height = `${h}px`
   iframe.style.border = 'none'
   iframe.style.visibility = 'hidden'
+  iframe.sandbox.add('allow-same-origin')
   iframe.srcdoc = processedHtml
 
   document.body.appendChild(iframe)

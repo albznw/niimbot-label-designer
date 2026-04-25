@@ -165,10 +165,8 @@ interface LabelCanvasProps {
   onToolUsed: () => void
 }
 
-let nodeIdCounter = 0
-function genId(prefix: string): string {
-  nodeIdCounter += 1
-  return `${prefix}-${Date.now()}-${nodeIdCounter}`
+function genId(): string {
+  return crypto.randomUUID()
 }
 
 interface CanvasData {
@@ -711,7 +709,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     }, [])
 
     const addTextAt = useCallback((x: number, y: number) => {
-      const id = genId('text')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'text',
@@ -732,7 +730,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     }, [])
 
     const addRectAt = useCallback((x: number, y: number) => {
-      const id = genId('rect')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'rect',
@@ -751,7 +749,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     }, [])
 
     const addCircleAt = useCallback((x: number, y: number) => {
-      const id = genId('circle')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'circle',
@@ -771,7 +769,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     }, [])
 
     const addLineAt = useCallback((x: number, y: number) => {
-      const id = genId('line')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'line',
@@ -790,7 +788,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
 
     const addQRAt = useCallback(async (x: number, y: number, content: string) => {
       const dataUrl = await generateQRDataURL(content, 80, 'M')
-      const id = genId('qr')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'qr',
@@ -821,7 +819,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             w = maxW
             h = Math.max(1, Math.round(naturalH * ratio))
           }
-          const id = genId('image')
+          const id = genId()
           const newNode: NodeConfig = {
             id,
             type: 'image',
@@ -843,7 +841,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
 
     const addBarcodeAt = useCallback(async (x: number, y: number, content: string) => {
       const dataUrl = await generateBarcodeDataURLAsync(content, 120, 40)
-      const id = genId('barcode')
+      const id = genId()
       const newNode: NodeConfig = {
         id,
         type: 'barcode',
@@ -879,7 +877,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       if (!copies || copies.length === 0) return
       const newNodes: NodeConfig[] = copies.map((c) => {
         const clone = JSON.parse(JSON.stringify(c)) as NodeConfig
-        clone.id = genId(clone.type)
+        clone.id = genId()
         clone.x = (clone.x ?? 0) + 15
         clone.y = (clone.y ?? 0) + 15
         return clone
@@ -1194,7 +1192,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                 const scale = Math.min(ICON_SIZE / naturalW, ICON_SIZE / naturalH)
                 const w = Math.max(1, Math.round(naturalW * scale))
                 const h = Math.max(1, Math.round(naturalH * scale))
-                const id = genId('image')
+                const id = genId()
                 const newNode: NodeConfig = {
                   id,
                   type: 'image',

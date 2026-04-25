@@ -22,9 +22,7 @@ export interface PrintHistoryResponse {
 }
 
 function genId(): string {
-  const bytes = new Uint8Array(6)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return crypto.randomUUID().replace(/-/g, '').slice(0, 12)
 }
 
 function mapLabelSizeToProfileId(labelSize: string | undefined): string {
@@ -40,99 +38,107 @@ function stripCornerSuffix(presetId: string): string {
   return presetId.replace(/-(rect|rounded)$/, '')
 }
 
+let dbPromise: Promise<IDBDatabase> | null = null
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onerror = () => reject(req.error)
-    req.onsuccess = () => resolve(req.result)
-    req.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result
-      const oldVersion = e.oldVersion
-
-      if (!db.objectStoreNames.contains('templates')) {
-        db.createObjectStore('templates', { keyPath: 'id' })
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION)
+      req.onerror = () => {
+        dbPromise = null
+        reject(req.error)
       }
-      if (!db.objectStoreNames.contains('settings')) {
-        db.createObjectStore('settings', { keyPath: 'key' })
-      }
-      if (!db.objectStoreNames.contains('print_history')) {
-        const hs = db.createObjectStore('print_history', { keyPath: 'id' })
-        hs.createIndex('printed_at', 'printed_at', { unique: false })
-      }
+      req.onsuccess = () => resolve(req.result)
+      req.onupgradeneeded = (e) => {
+        const db = (e.target as IDBOpenDBRequest).result
+        const oldVersion = e.oldVersion
 
-      const tx = (e.target as IDBOpenDBRequest).transaction
-      if (!tx) return
+        if (!db.objectStoreNames.contains('templates')) {
+          db.createObjectStore('templates', { keyPath: 'id' })
+        }
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' })
+        }
+        if (!db.objectStoreNames.contains('print_history')) {
+          const hs = db.createObjectStore('print_history', { keyPath: 'id' })
+          hs.createIndex('printed_at', 'printed_at', { unique: false })
+        }
 
-      // v1 → v2: migrate label_size to preset_id, add display_orientation and density
-      if (oldVersion < 2) {
-        const store = tx.objectStore('templates')
-        const cursorReq = store.openCursor()
-        cursorReq.onsuccess = (ce) => {
-          const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
-          if (!cursor) return
-          const record = cursor.value as Record<string, unknown>
-          let dirty = false
+        const tx = (e.target as IDBOpenDBRequest).transaction
+        if (!tx) return
 
-          if (!('preset_id' in record) || record['preset_id'] == null) {
-            record["preset_id"] = mapLabelSizeToProfileId(record['label_size'] as string | undefined)
-            dirty = true
+        // v1 → v2: migrate label_size to preset_id, add display_orientation and density
+        if (oldVersion < 2) {
+          const store = tx.objectStore('templates')
+          const cursorReq = store.openCursor()
+          cursorReq.onsuccess = (ce) => {
+            const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
+            if (!cursor) return
+            const record = cursor.value as Record<string, unknown>
+            let dirty = false
+
+            if (!('preset_id' in record) || record['preset_id'] == null) {
+              record["preset_id"] = mapLabelSizeToProfileId(record['label_size'] as string | undefined)
+              dirty = true
+            }
+            if (!('display_orientation' in record) || record['display_orientation'] == null) {
+              record['display_orientation'] = 'landscape'
+              dirty = true
+            }
+            if (!('density' in record) || record['density'] == null) {
+              record['density'] = 3
+              dirty = true
+            }
+
+            if (dirty) cursor.update(record)
+            cursor.continue()
           }
-          if (!('display_orientation' in record) || record['display_orientation'] == null) {
-            record['display_orientation'] = 'landscape'
-            dirty = true
-          }
-          if (!('density' in record) || record['density'] == null) {
-            record['density'] = 3
-            dirty = true
-          }
+        }
 
-          if (dirty) cursor.update(record)
-          cursor.continue()
+        // v2 → v3: add corner_style, strip -rect/-rounded suffix from preset_id
+        if (oldVersion < 3) {
+          const store = tx.objectStore('templates')
+          const cursorReq = store.openCursor()
+          cursorReq.onsuccess = (ce) => {
+            const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
+            if (!cursor) return
+            const record = cursor.value as Record<string, unknown>
+            let dirty = false
+
+            if (!('corner_style' in record) || record['corner_style'] == null) {
+              record['corner_style'] = 'rect'
+              dirty = true
+            }
+            if (typeof record['preset_id'] === 'string' && /-(rect|rounded)$/.test(record['preset_id'])) {
+              record['preset_id'] = stripCornerSuffix(record['preset_id'])
+              dirty = true
+            }
+
+            if (dirty) cursor.update(record)
+            cursor.continue()
+          }
+        }
+
+        // v3 → v4: rename preset_id to label_profile
+        if (oldVersion < 4) {
+          const store = tx.objectStore('templates')
+          const cursorReq = store.openCursor()
+          cursorReq.onsuccess = (ce) => {
+            const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
+            if (!cursor) return
+            const record = cursor.value as Record<string, unknown>
+            if ('preset_id' in record) {
+              record['label_profile'] = record['preset_id']
+              delete record['preset_id']
+              cursor.update(record)
+            }
+            cursor.continue()
+          }
         }
       }
-
-      // v2 → v3: add corner_style, strip -rect/-rounded suffix from preset_id
-      if (oldVersion < 3) {
-        const store = tx.objectStore('templates')
-        const cursorReq = store.openCursor()
-        cursorReq.onsuccess = (ce) => {
-          const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
-          if (!cursor) return
-          const record = cursor.value as Record<string, unknown>
-          let dirty = false
-
-          if (!('corner_style' in record) || record['corner_style'] == null) {
-            record['corner_style'] = 'rect'
-            dirty = true
-          }
-          if (typeof record['preset_id'] === 'string' && /-(rect|rounded)$/.test(record['preset_id'])) {
-            record['preset_id'] = stripCornerSuffix(record['preset_id'])
-            dirty = true
-          }
-
-          if (dirty) cursor.update(record)
-          cursor.continue()
-        }
-      }
-
-      // v3 → v4: rename preset_id to label_profile
-      if (oldVersion < 4) {
-        const store = tx.objectStore('templates')
-        const cursorReq = store.openCursor()
-        cursorReq.onsuccess = (ce) => {
-          const cursor = (ce.target as IDBRequest<IDBCursorWithValue>).result
-          if (!cursor) return
-          const record = cursor.value as Record<string, unknown>
-          if ('preset_id' in record) {
-            record['label_profile'] = record['preset_id']
-            delete record['preset_id']
-            cursor.update(record)
-          }
-          cursor.continue()
-        }
-      }
-    }
-  })
+    })
+  }
+  return dbPromise
 }
 
 function tx<T>(
@@ -205,10 +211,36 @@ export async function savePrintJob(data: Omit<PrintJobRecord, 'id'>): Promise<Pr
 }
 
 export async function getPrintHistory(page = 1, perPage = 20): Promise<PrintHistoryResponse> {
-  const all = await tx<PrintJobRecord[]>('print_history', 'readonly', (store) => store.getAll())
-  all.sort((a, b) => b.printed_at.localeCompare(a.printed_at))
-  const total = all.length
-  const items = all.slice((page - 1) * perPage, page * perPage)
+  const offset = (page - 1) * perPage
+  const limit = perPage
+
+  const db = await openDb()
+
+  const total = await new Promise<number>((resolve, reject) => {
+    const t = db.transaction('print_history', 'readonly')
+    const store = t.objectStore('print_history')
+    const req = store.count()
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+
+  const items = await new Promise<PrintJobRecord[]>((resolve, reject) => {
+    const t = db.transaction('print_history', 'readonly')
+    const store = t.objectStore('print_history')
+    const index = store.index('printed_at')
+    const request = index.openCursor(null, 'prev')
+    const results: PrintJobRecord[] = []
+    let skipped = 0
+    request.onsuccess = (e) => {
+      const cursor = (e.target as IDBRequest).result as IDBCursorWithValue | null
+      if (!cursor || results.length >= limit) { resolve(results); return }
+      if (skipped < offset) { skipped++; cursor.continue(); return }
+      results.push(cursor.value as PrintJobRecord)
+      cursor.continue()
+    }
+    request.onerror = () => reject(request.error)
+  })
+
   return { items, total, page, per_page: perPage }
 }
 

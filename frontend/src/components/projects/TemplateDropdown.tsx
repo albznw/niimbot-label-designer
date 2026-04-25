@@ -42,6 +42,7 @@ export function TemplateDropdown({
   const [newProfileId, setNewProfileId] = useState<string>(DEFAULT_PROFILE_ID)
   const [newMode, setNewMode] = useState<'canvas' | 'html'>('canvas')
   const [saving, setSaving] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -178,11 +179,16 @@ export function TemplateDropdown({
         </button>
         {selectedTemplate && (
           <button
-            className="text-xs font-mono text-gray-500 hover:text-gray-300 transition-colors select-all"
+            className={"text-xs font-mono transition-colors select-all " + (copied ? 'text-green-400' : 'text-gray-500 hover:text-gray-300')}
             title="Click to copy ID"
-            onClick={() => navigator.clipboard.writeText(selectedTemplate.id)}
+            onClick={() => {
+              navigator.clipboard.writeText(selectedTemplate.id).then(() => {
+                setCopied(true)
+                setTimeout(() => setCopied(false), 1500)
+              }).catch(() => {})
+            }}
           >
-            {selectedTemplate.id}
+            {copied ? 'copied!' : selectedTemplate.id}
           </button>
         )}
 
