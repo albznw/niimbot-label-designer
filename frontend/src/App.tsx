@@ -473,6 +473,23 @@ export function App() {
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [selectedTemplate, bitmapDims, dims, printerStatus, bitmap])
 
+  const handleRenderRow = useCallback(async (
+    vars: Record<string, string>
+  ): Promise<{ bitmap: Uint8Array; w: number; h: number }> => {
+    const w = bitmapDims.w || dims.w
+    const h = bitmapDims.h || dims.h
+    setVariableValues(vars)
+    return new Promise((resolve) => {
+      bitmapResolverRef.current = (b, bw, bh) => resolve({ bitmap: b, w: bw, h: bh })
+      setTimeout(() => {
+        if (bitmapResolverRef.current) {
+          bitmapResolverRef.current = null
+          resolve({ bitmap: bitmap!, w, h })
+        }
+      }, 500)
+    })
+  }, [bitmapDims, dims, bitmap])
+
   // Intercept 'icon' tool: open modal and revert tool to 'select'
   useEffect(() => {
     if (activeTool === 'icon') {
@@ -758,6 +775,7 @@ export function App() {
           printRows={printRows}
           onPrint={handlePrint}
           onBatchPrint={handleBatchPrint}
+          onRenderRow={handleRenderRow}
           onClose={() => setShowPrintDialog(false)}
         />
       )}
