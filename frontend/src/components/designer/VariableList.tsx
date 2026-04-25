@@ -22,7 +22,7 @@ interface VariableListProps {
 
 function quoteField(val: string): string {
   if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-    return '"' + val.replaceAll('"', '""') + '"'
+    return '"' + val.replace(/"/g, '""') + '"'
   }
   return val
 }
@@ -75,7 +75,7 @@ function parseFields(line: string): string[] {
 function migrateTsvToCsv(text: string): string {
   const firstLine = text.split('\n')[0] ?? ''
   if (firstLine.includes('\t') && !firstLine.includes(',')) {
-    return text.replaceAll('\t', ',')
+    return text.replace(/\t/g, ',')
   }
   return text
 }

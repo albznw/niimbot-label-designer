@@ -5,7 +5,7 @@ import { htmlTo1BitBitmap } from '../../lib/html-renderer'
 
 interface HtmlEditorProps {
   html: string
-  presetId: string
+  profileId: string
   variableValues: Record<string, string>
   onChange: (html: string) => void
   onBitmapUpdate: (bitmap: Uint8Array, w: number, h: number) => void
@@ -13,7 +13,7 @@ interface HtmlEditorProps {
 
 export function HtmlEditor({
   html,
-  presetId,
+  profileId,
   variableValues,
   onChange,
   onBitmapUpdate,
@@ -26,7 +26,7 @@ export function HtmlEditor({
   const triggerRender = (value: string, vars: Record<string, string>) => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(async () => {
-      const preset = getProfileById(presetId)
+      const preset = getProfileById(profileId)
       const { w, h } = preset.canvasSize
       setRendering(true)
       try {

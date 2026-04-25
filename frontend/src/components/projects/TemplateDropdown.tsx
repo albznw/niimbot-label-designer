@@ -140,6 +140,7 @@ export function TemplateDropdown({
         variables: raw.variables as Template['variables'],
         print_rows: raw.print_rows as Record<string, string>[],
         variable_text: raw.variable_text as string | null,
+        corner_style: (raw.corner_style as Template['corner_style']) ?? 'rect',
       }
 
       await onImport(data)
