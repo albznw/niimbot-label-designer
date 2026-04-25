@@ -21,8 +21,8 @@ import {
 } from 'react-konva'
 import Konva from 'konva'
 import type { Template } from '../../types/project'
-import { getCanvasDims } from '../../types/label'
-import type { LabelDisplaySettings } from '../../types/label'
+import { getCanvasDims, getEffectivePrintDirection } from '../../types/label'
+import type { LabelProfile, LabelDisplayOrientation } from '../../types/label'
 import {
   applyVariables,
   generateQRDataURL,
@@ -157,7 +157,8 @@ interface LabelCanvasProps {
   template: Template
   variableValues: Record<string, string>
   activeTool: Tool
-  labelSettings: LabelDisplaySettings
+  labelProfile: LabelProfile
+  displayOrientation: LabelDisplayOrientation
   onCanvasChange: (json: string) => void
   onBitmapUpdate: (bitmap: Uint8Array, w: number, h: number) => void
   onSelectionChange: (objs: NodeConfig[]) => void
@@ -335,7 +336,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       template,
       variableValues,
       activeTool,
-      labelSettings,
+      labelProfile,
+      displayOrientation,
       onCanvasChange,
       onBitmapUpdate,
       onSelectionChange,
@@ -345,9 +347,11 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
   ) {
     const STAGE_PAD = 80
     const dims = useMemo(
-      () => getCanvasDims(template.label_size, labelSettings.orientation),
-      [template.label_size, labelSettings.orientation]
+      () => getCanvasDims(labelProfile, displayOrientation),
+      [labelProfile, displayOrientation]
     )
+
+    const effectivePrintDir = getEffectivePrintDirection(labelProfile, displayOrientation)
 
     const [zoom, setZoom] = useState(1)
 
@@ -365,6 +369,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const stageRef = useRef<Konva.Stage | null>(null)
     const layerRef = useRef<Konva.Layer | null>(null)
     const guideLayerRef = useRef<Konva.Layer | null>(null)
+    const overlayLayerRef = useRef<Konva.Layer | null>(null)
+    const backgroundLayerRef = useRef<Konva.Layer | null>(null)
     const transformerRef = useRef<Konva.Transformer | null>(null)
     const nodeRefs = useRef<Map<string, Konva.Node>>(new Map())
     const copiedNodesRef = useRef<NodeConfig[]>([])
@@ -470,6 +476,12 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       if (guideLayer) {
         guideLayer.visible(false)
       }
+      const bgLayer = backgroundLayerRef.current
+      const bgWasVisible = bgLayer?.visible() ?? true
+      if (bgLayer) bgLayer.visible(false)
+      const overlayLayer = overlayLayerRef.current
+      const overlayWasVisible = overlayLayer?.visible() ?? true
+      if (overlayLayer) overlayLayer.visible(false)
 
       // Temporarily substitute variables in text nodes and restore actual fill color
       // (preview overrides fill with a green tint for variable-containing nodes)
@@ -485,49 +497,49 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         if (substituted !== original) t.text(substituted)
         if (actualFill !== currentFill) t.fill(actualFill)
       })
-      // Disable rounded corners so bitmap has no black corner pixels
-      const layer = layerRef.current
-      const savedClipFn = layer?.getAttr('clipFunc') as ((ctx: CanvasRenderingContext2D) => void) | undefined
-      if (layer) {
-        layer.setAttr('clipFunc', (ctx: CanvasRenderingContext2D) => { ctx.rect(0, 0, dims.w, dims.h) })
-      }
-      const bgRect = stage.findOne('.bg') as Konva.Rect | null
-      const savedRadius = bgRect?.cornerRadius()
-      bgRect?.cornerRadius(0)
 
       stage.batchDraw()
 
-      const srcCanvas = await konvaStageToCanvas(stage, w, h, STAGE_PAD, STAGE_PAD)
+      try {
+        const srcCanvas = await konvaStageToCanvas(stage, w, h, STAGE_PAD, STAGE_PAD)
 
-      // Restore rounded corners
-      if (layer) layer.setAttr('clipFunc', savedClipFn)
-      if (bgRect && savedRadius !== undefined) bgRect.cornerRadius(savedRadius as number)
+        // Composite onto a white canvas so transparent areas (e.g. cable label notch) become white, not black
+        const whiteCanvas = document.createElement('canvas')
+        whiteCanvas.width = w
+        whiteCanvas.height = h
+        const whiteCtx = whiteCanvas.getContext('2d')!
+        whiteCtx.fillStyle = 'white'
+        whiteCtx.fillRect(0, 0, w, h)
+        whiteCtx.drawImage(srcCanvas, 0, 0)
 
-      const imageRegions: ImageDitherRegion[] = nodesRef.current
-        .filter((n) => n.type === 'image')
-        .map((n) => ({
-          x: n.x,
-          y: n.y,
-          w: (n as Extract<typeof n, { type: 'image' }>).width,
-          h: (n as Extract<typeof n, { type: 'image' }>).height,
-          algorithm: (n as Extract<typeof n, { type: 'image' }>).ditherAlgorithm ?? 'threshold',
-          threshold: (n as Extract<typeof n, { type: 'image' }>).ditherThreshold ?? 128,
-        }))
-        .filter((r) => r.algorithm !== 'threshold' || r.threshold !== 128)
-      const { bitmap } = canvasTo1BitBitmap(srcCanvas, w, h, imageRegions)
+        const imageRegions: ImageDitherRegion[] = nodesRef.current
+          .filter((n) => n.type === 'image')
+          .map((n) => ({
+            x: n.x,
+            y: n.y,
+            w: (n as Extract<typeof n, { type: 'image' }>).width,
+            h: (n as Extract<typeof n, { type: 'image' }>).height,
+            algorithm: (n as Extract<typeof n, { type: 'image' }>).ditherAlgorithm ?? 'threshold',
+            threshold: (n as Extract<typeof n, { type: 'image' }>).ditherThreshold ?? 128,
+          }))
+          .filter((r) => r.algorithm !== 'threshold' || r.threshold !== 128)
+        const { bitmap } = canvasTo1BitBitmap(whiteCanvas, w, h, imageRegions)
 
-      // Restore
-      restores.forEach(({ node, original, fill }) => { node.text(original); node.fill(fill) })
-      if (transformer && transformerWasVisible) {
-        transformer.visible(true)
+        onBitmapUpdateRef.current(bitmap, w, h)
+      } finally {
+        // Restore
+        restores.forEach(({ node, original, fill }) => { node.text(original); node.fill(fill) })
+        if (transformer && transformerWasVisible) {
+          transformer.visible(true)
+        }
+        if (guideLayer && guideLayerWasVisible) {
+          guideLayer.visible(true)
+        }
+        if (overlayLayer) overlayLayer.visible(overlayWasVisible)
+        if (bgLayer) bgLayer.visible(bgWasVisible)
+        stage.batchDraw()
       }
-      if (guideLayer && guideLayerWasVisible) {
-        guideLayer.visible(true)
-      }
-      stage.batchDraw()
-
-      onBitmapUpdateRef.current(bitmap, w, h)
-    }, [dims, template.label_size, labelSettings.orientation])
+    }, [dims, labelProfile.id, displayOrientation])
 
     const scheduleUpdate = useCallback(() => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -591,7 +603,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     useEffect(() => {
       renderBitmap()
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [labelSettings.orientation, template.label_size])
+    }, [displayOrientation, labelProfile.id])
 
     // Cleanup on unmount
     useEffect(() => {
@@ -1312,7 +1324,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
       const target = e.target
       const stage = target.getStage()
-      const isBg = target === stage || target.name() === 'bg'
+      const isBg = target === stage
       if (!isBg) return
 
       const tool = activeToolRef.current
@@ -1666,49 +1678,49 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
             onDragMove={handleStageDragMove}
             onDragEnd={handleStageDragEnd}
           >
+            <Layer ref={backgroundLayerRef} x={STAGE_PAD} y={STAGE_PAD} listening={false}>
+              {(() => {
+                const isRounded = template.corner_style === 'rounded'
+                const CORNER_RADIUS_PX = 12
+                if (labelProfile.type === 'simple') {
+                  const r = isRounded ? CORNER_RADIUS_PX : 0
+                  return <Rect x={0} y={0} width={dims.w} height={dims.h} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                }
+                if (labelProfile.type === 'double') {
+                  if (effectivePrintDir === 'top') {
+                    const r = isRounded ? CORNER_RADIUS_PX : 0
+                    return (<>
+                      <Rect x={0} y={0} width={dims.w} height={dims.h / 2} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                      <Rect x={0} y={dims.h / 2} width={dims.w} height={dims.h / 2} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                    </>)
+                  } else {
+                    const r = isRounded ? CORNER_RADIUS_PX : 0
+                    return (<>
+                      <Rect x={0} y={0} width={dims.w / 2} height={dims.h} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                      <Rect x={dims.w / 2} y={0} width={dims.w / 2} height={dims.h} fill="white" cornerRadius={r} strokeEnabled={false} listening={false} />
+                    </>)
+                  }
+                }
+                // cable
+                const r = isRounded ? CORNER_RADIUS_PX : 0
+                if (effectivePrintDir === 'left') {
+                  return (<>
+                    <Rect x={0} y={0} width={dims.w / 2} height={dims.h} fill="white" cornerRadius={[r, 0, r, r]} strokeEnabled={false} listening={false} />
+                    <Rect x={dims.w / 2} y={0} width={dims.w / 2} height={dims.h / 2} fill="white" cornerRadius={[0, r, r, 0]} strokeEnabled={false} listening={false} />
+                  </>)
+                } else {
+                  return (<>
+                    <Rect x={0} y={dims.h / 2} width={dims.w} height={dims.h / 2} fill="white" cornerRadius={[0, 0, r, r]} strokeEnabled={false} listening={false} />
+                    <Rect x={0} y={0} width={dims.w / 2} height={dims.h / 2} fill="white" cornerRadius={[r, 0, 0, r]} strokeEnabled={false} listening={false} />
+                  </>)
+                }
+              })()}
+            </Layer>
             <Layer
               ref={layerRef}
               x={STAGE_PAD}
               y={STAGE_PAD}
-              clipFunc={(ctx) => {
-                const isRounded = labelSettings.cornerStyle === 'rounded'
-                const is30x30 = template.label_size === '30x30'
-                ctx.beginPath()
-                if (!isRounded) {
-                  ctx.rect(0, 0, dims.w, dims.h)
-                } else if (is30x30) {
-                  const r = Math.min(dims.w, dims.h / 2) * 0.08
-                  if (typeof ctx.roundRect === 'function') {
-                    ctx.roundRect(0, 0, dims.w, dims.h / 2, [r, r, 0, 0])
-                    ctx.roundRect(0, dims.h / 2, dims.w, dims.h / 2, [0, 0, r, r])
-                  } else {
-                    ctx.rect(0, 0, dims.w, dims.h)
-                  }
-                } else {
-                  const r = Math.min(dims.w, dims.h) * 0.08
-                  if (typeof ctx.roundRect === 'function') {
-                    ctx.roundRect(0, 0, dims.w, dims.h, r)
-                  } else {
-                    ctx.rect(0, 0, dims.w, dims.h)
-                  }
-                }
-                ctx.closePath()
-              }}
             >
-              <Rect
-                x={0}
-                y={0}
-                width={dims.w}
-                height={dims.h}
-                fill="white"
-                cornerRadius={
-                  labelSettings.cornerStyle === 'rounded' && template.label_size !== '30x30'
-                    ? Math.min(dims.w, dims.h) * 0.08
-                    : 0
-                }
-                listening={true}
-                name="bg"
-              />
               {nodes.map((node) => {
                 if (node.type === 'text') {
                   return (
@@ -1927,6 +1939,32 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
                   return newBox
                 }}
               />
+            </Layer>
+            <Layer ref={overlayLayerRef} x={STAGE_PAD} y={STAGE_PAD} listening={false}>
+              {/* Double label divider */}
+              {labelProfile.type === 'double' && (
+                effectivePrintDir === 'top' ? (
+                  <Line points={[0, dims.h / 2, dims.w, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                ) : (
+                  <Line points={[dims.w / 2, 0, dims.w / 2, dims.h]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                )
+              )}
+              {/* Cable label dividers */}
+              {labelProfile.type === 'cable' && (
+                effectivePrintDir === 'left' ? (<>
+                  <Line points={[0, dims.h / 2, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                  <Line points={[dims.w / 2, 0, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                </>) : (<>
+                  <Line points={[dims.w / 2, 0, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                  <Line points={[0, dims.h / 2, dims.w / 2, dims.h / 2]} stroke="rgba(59,130,246,0.75)" strokeWidth={1} dash={[4, 4]} />
+                </>)
+              )}
+              {/* Print direction indicator */}
+              {effectivePrintDir === 'left' ? (
+                <Line points={[0, 0, 0, dims.h]} stroke="rgba(59,130,246,0.9)" strokeWidth={2} dash={[]} />
+              ) : (
+                <Line points={[0, 0, dims.w, 0]} stroke="rgba(59,130,246,0.9)" strokeWidth={2} dash={[]} />
+              )}
             </Layer>
             <Layer ref={guideLayerRef} x={STAGE_PAD} y={STAGE_PAD} listening={false} />
           </Stage>
