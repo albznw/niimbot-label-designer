@@ -32,21 +32,41 @@ The frontend is fully self-contained (PWA, IndexedDB storage). The backend is op
 |------|---------|
 | `frontend/src/App.tsx` | Root component - all global state lives here |
 | `frontend/src/components/designer/LabelCanvas.tsx` | Konva 2D canvas editor, renders bitmap |
-| `frontend/src/components/designer/VariableList.tsx` | Monaco TSV editor (line 0 = var names, line 1+ = rows) |
+| `frontend/src/components/designer/VariableList.tsx` | Monaco CSV editor (line 0 = var names, line 1+ = rows) |
 | `frontend/src/components/designer/HtmlEditor.tsx` | Monaco HTML editor with live bitmap preview |
-| `frontend/src/lib/db.ts` | IndexedDB: templates, settings, print_history |
+| `frontend/src/lib/db.ts` | IndexedDB: templates, settings, print_history (v4) |
 | `frontend/src/lib/label-renderer.ts` | Canvas → 1-bit bitmap + dithering algorithms |
 | `frontend/src/lib/printer-client.ts` | Singleton wrapping niimbluelib BT/Serial |
 | `backend/app/main.py` | Entire backend: WS relay + HTTP print queue API |
 
-## Agent Delegation Rules
+## Orchestration Pattern
 
-**Each agent must do exactly ONE task. Never bundle multiple tasks into one agent.**
+**You are a delegator. Never write code or edit files directly. Always delegate to subagents.**
 
+### Before touching anything
+1. Read all relevant files to understand the current state
+2. Identify the root cause before proposing a solution
+3. Present a full plan and get confirmation before starting work
+
+### Planning
+- Break work into discrete, single-responsibility tasks
+- Identify dependencies between tasks and group them into phases
+- Independent tasks run in parallel (single message, multiple Agent calls)
+- Dependent tasks run in sequence (wait for phase N before starting phase N+1)
+- Run `npx tsc --noEmit` after each phase to catch conflicts early
+
+### Delegation rules
+- **Each agent does exactly ONE task. Never bundle unrelated tasks.**
 - Frontend (React/TypeScript/CSS) changes → `claude-frontend` agent
 - Python changes → `claude-pydev` agent (even one-line fixes)
 - Exploration/research → `Explore` agent
-- Run agents in parallel when tasks are independent
+- Give agents precise context: exact file paths, line numbers, what to change and why
+- Trust but verify: check actual file diffs after agents complete, don't just take their word for it
+
+### Committing
+- Group commits by logical concern, not by file
+- Stage specific files per commit - never `git add -A`
+- Prefix: `fix:`, `feat:`, `refactor:`, `chore:`
 
 ## Development
 
@@ -67,31 +87,47 @@ cd frontend && npm run build
 docker compose up --build
 ```
 
+## Domain Concepts
+
+### Label Profile
+A label profile defines the physical label format. Stored as `label_profile: string` on templates. Defined in `types/label.ts` as `LabelProfile`. Three profiles exist: `simple-50x30`, `double-30x15`, `cable-40x30`.
+
+- Do NOT call these "presets" - the correct term is **label profile**
+- `getProfileById(id)` in `types/label.ts` is the lookup function
+- DB field is `label_profile` (migrated from `preset_id` in v4)
+
+### Cable Label Layout
+Canvas is 640×240px (80×30mm at 8px/mm). For `printDirection: 'left'`:
+- Left half (0–320px): two stacked 40×15mm label areas (top: y=0–120, bottom: y=120–240)
+- Tail: 320px wide, 64px tall (8mm), centered on the top label (y=28–92px)
+
+### Print Direction
+`printDirection` on a `LabelProfile` is the physical feed direction. `getEffectivePrintDirection(profile, orientation)` accounts for display orientation flips. Always use this - never raw `orientation` - when drawing the print edge indicator.
+
 ## Variable Editor (VariableList)
 
-Uses Monaco Editor with TSV format:
-- Line 0: tab-separated variable names (editable - renaming here renames the variable)
-- Line 1: tab-separated default values (drives canvas preview)
-- Lines 2+: print batch rows
+Uses Monaco Editor with **CSV format** (RFC 4180, quoted fields supported):
+- Line 0: comma-separated variable names
+- Lines 1+: data rows (line 1 drives canvas preview)
 
-Tab key inserts a real tab character. Cursor line drives `activePrintRow`.
+Cursor line drives `activePrintRow`. Old tab-delimited data is auto-migrated on load.
 
 ## Bitmap Rendering
 
-- Konva canvas is captured via `konvaStageToCanvas` in `LabelCanvas.tsx`
-- Rounded corners are applied as CSS `border-radius` + `overflow: hidden` on the preview wrapper - NOT baked into the bitmap (black pixels in corners would print)
-- `renderBitmap()` temporarily disables the layer clipFunc and bg rect cornerRadius before capture, then restores
+- Konva canvas captured via `konvaStageToCanvas` in `LabelCanvas.tsx`
+- `renderBitmap()` hides background + overlay layers for clean capture, always restores them in a `try/finally` block - if the canvas throws (e.g. tainted cross-origin data in Firefox), layers are guaranteed to restore
+- Rounded corners are visual only - NOT baked into the bitmap
 
 ## Canvas Editor (LabelCanvas)
 
-- Snap guides: combined group bbox used when multiple nodes are selected (Fix 5)
+- Snap guides: combined group bbox used when multiple nodes are selected
 - Distribute: `distributeSelectedInternal` evenly spaces ≥3 nodes
 - Align: `alignSelectedInternal` aligns to group bounds
 - Undo/redo: 50-step history via ref
 
 ## State Persistence
 
-- Templates: IndexedDB (`templates` store), auto-saved with 500ms debounce
+- Templates: IndexedDB (`templates` store, v4), auto-saved with 500ms debounce
 - Last opened template: `getSetting('lastTemplateId')` loaded on init
 - Backend URL: `getSetting('backendUrl')` loaded on init, connects WS on load
 
