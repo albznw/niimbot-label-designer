@@ -13,6 +13,8 @@ export type PrintOptions = {
   density: number
   quantity: number
   labelType?: number
+  printHalf?: 'both' | 'top' | 'bottom'
+  printDirection?: 'top' | 'left'
 }
 
 function rotateCanvas90CCW(src: HTMLCanvasElement): HTMLCanvasElement {
@@ -103,10 +105,39 @@ class PrinterClient {
       throw new Error('Printer not connected')
     }
 
-    let canvas = bitmapToCanvas(bitmap, bitmapWidth, bitmapHeight)
+    // Crop bitmap for half-label printing
+    let workBitmap = bitmap
+    let workWidth = bitmapWidth
+    let workHeight = bitmapHeight
+
+    if (options.printHalf === 'top' || options.printHalf === 'bottom') {
+      const isHorizontalSplit = (options.printDirection ?? 'top') === 'top'
+      if (isHorizontalSplit) {
+        const halfH = Math.floor(bitmapHeight / 2)
+        const cropped = new Uint8Array(bitmapWidth * halfH)
+        const startRow = options.printHalf === 'bottom' ? halfH : 0
+        for (let row = 0; row < halfH; row++) {
+          const srcStart = (startRow + row) * bitmapWidth
+          cropped.set(bitmap.slice(srcStart, srcStart + bitmapWidth), row * bitmapWidth)
+        }
+        workBitmap = cropped; workWidth = bitmapWidth; workHeight = halfH
+      } else {
+        const halfW = Math.floor(bitmapWidth / 2)
+        const cropped = new Uint8Array(halfW * bitmapHeight)
+        const startCol = options.printHalf === 'bottom' ? halfW : 0
+        for (let row = 0; row < bitmapHeight; row++) {
+          for (let col = 0; col < halfW; col++) {
+            cropped[row * halfW + col] = bitmap[row * bitmapWidth + startCol + col]
+          }
+        }
+        workBitmap = cropped; workWidth = halfW; workHeight = bitmapHeight
+      }
+    }
+
+    let canvas = bitmapToCanvas(workBitmap, workWidth, workHeight)
 
     // Landscape label - rotate 90° CCW before encoding
-    if (bitmapWidth > bitmapHeight) {
+    if (workWidth > workHeight) {
       canvas = rotateCanvas90CCW(canvas)
     }
 
