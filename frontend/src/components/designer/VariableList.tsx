@@ -16,14 +16,68 @@ interface VariableListProps {
   syncKey: string
 }
 
-// CSV format:
+// CSV format (RFC 4180):
 //   line 0 = variable names
 //   lines 1+ = data rows (all are print rows; line 1 drives canvas preview by default)
 
+function quoteField(val: string): string {
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+    return '"' + val.replaceAll('"', '""') + '"'
+  }
+  return val
+}
+
 function serialize(variables: Variable[], printRows: Record<string, string>[]): string {
-  const header = variables.map((v) => v.name).join(',')
-  const rows = printRows.map((row) => variables.map((v) => row[v.name] ?? '').join(','))
+  const header = variables.map((v) => quoteField(v.name)).join(',')
+  const rows = printRows.map((row) => variables.map((v) => quoteField(row[v.name] ?? '')).join(','))
   return [header, ...rows].join('\n')
+}
+
+function parseFields(line: string): string[] {
+  const fields: string[] = []
+  let i = 0
+  while (i <= line.length) {
+    if (line[i] === '"') {
+      // Quoted field
+      i++ // skip opening quote
+      let field = ''
+      while (i < line.length) {
+        if (line[i] === '"') {
+          if (line[i + 1] === '"') {
+            field += '"'
+            i += 2
+          } else {
+            i++ // skip closing quote
+            break
+          }
+        } else {
+          field += line[i]
+          i++
+        }
+      }
+      fields.push(field)
+      if (line[i] === ',') i++ // skip delimiter
+    } else {
+      // Unquoted field - read until next comma or end
+      const end = line.indexOf(',', i)
+      if (end === -1) {
+        fields.push(line.slice(i))
+        break
+      } else {
+        fields.push(line.slice(i, end))
+        i = end + 1
+      }
+    }
+  }
+  return fields
+}
+
+function migrateTsvToCsv(text: string): string {
+  const firstLine = text.split('\n')[0] ?? ''
+  if (firstLine.includes('\t') && !firstLine.includes(',')) {
+    return text.replaceAll('\t', ',')
+  }
+  return text
 }
 
 function parseCSV(text: string): {
@@ -33,12 +87,12 @@ function parseCSV(text: string): {
 } {
   const lines = text.split('\n')
   const [headerLine = '', ...rowLines] = lines
-  const varNames = headerLine.split(',').map((s) => s.trim()).filter(Boolean)
+  const varNames = parseFields(headerLine).map((s) => s.trim()).filter(Boolean)
   const variables: Variable[] = varNames.map((name) => ({ name, type: 'text' as const, default: '' }))
   const printRows = rowLines
     .filter((line) => line.length > 0)
     .map((line) => {
-      const parts = line.split(',')
+      const parts = parseFields(line)
       return Object.fromEntries(varNames.map((n, i) => [n, parts[i] ?? '']))
     })
   const firstRow = printRows[0] ?? {}
@@ -71,7 +125,7 @@ export function VariableList({
     import('monaco-editor').then((monaco) => {
       if (disposed || !containerRef.current) return
 
-      const initial = initialText || serialize(variables, printRows)
+      const initial = migrateTsvToCsv(initialText || serialize(variables, printRows))
 
       const editor = monaco.editor.create(containerRef.current!, {
         value: initial,
