@@ -371,6 +371,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const guideLayerRef = useRef<Konva.Layer | null>(null)
     const overlayLayerRef = useRef<Konva.Layer | null>(null)
     const backgroundLayerRef = useRef<Konva.Layer | null>(null)
+    const renderingRef = useRef(false)
     const transformerRef = useRef<Konva.Transformer | null>(null)
     const nodeRefs = useRef<Map<string, Konva.Node>>(new Map())
     const copiedNodesRef = useRef<NodeConfig[]>([])
@@ -461,6 +462,8 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     const renderBitmap = useCallback(async () => {
       const stage = stageRef.current
       if (!stage) return
+      if (renderingRef.current) return
+      renderingRef.current = true
       const vars = variableValuesRef.current
       const w = dims.w
       const h = dims.h
@@ -537,6 +540,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         }
         if (overlayLayer) overlayLayer.visible(overlayWasVisible)
         if (bgLayer) bgLayer.visible(bgWasVisible)
+        renderingRef.current = false
         stage.batchDraw()
       }
     }, [dims, labelProfile.id, displayOrientation])
