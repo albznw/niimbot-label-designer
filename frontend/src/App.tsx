@@ -489,9 +489,11 @@ export function App() {
       if (editorMode !== 'canvas') return
       if (!selectedTemplate) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      const tag = (document.activeElement?.tagName ?? '').toLowerCase()
-      const isEditable = document.activeElement?.hasAttribute('contenteditable') === true
-      if (['input', 'textarea', 'select'].includes(tag) || isEditable) return
+      const active = document.activeElement
+      const tag = (active?.tagName ?? '').toLowerCase()
+      const isEditable = active?.hasAttribute('contenteditable') === true
+      const isInsideMonaco = !!active?.closest?.('.monaco-editor')
+      if (['input', 'textarea', 'select'].includes(tag) || isEditable || isInsideMonaco) return
 
       const key = e.key.toLowerCase()
 
