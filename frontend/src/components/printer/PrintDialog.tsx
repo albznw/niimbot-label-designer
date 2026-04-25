@@ -227,7 +227,7 @@ export function PrintDialog({
                     className="relative border border-white/10 cursor-zoom-in"
                     style={{
                       lineHeight: 0,
-                      borderRadius: template.corner_style === 'rounded' ? Math.round(12 * (displayDims.w / (carouselEntry?.w ?? bitmapWidth || 1))) : 4,
+                      borderRadius: template.corner_style === 'rounded' ? Math.round(12 * (displayDims.w / ((carouselEntry?.w ?? bitmapWidth) || 1))) : 4,
                       overflow: 'hidden',
                       minWidth: 80,
                       minHeight: 40,
