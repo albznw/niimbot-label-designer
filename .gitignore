@@ -8,3 +8,4 @@ backend/data/
 .DS_Store
 .omc/
 .playwright_mcp/
+*.tsbuildinfo
