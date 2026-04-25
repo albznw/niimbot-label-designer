@@ -490,7 +490,7 @@ export function App() {
       if (!selectedTemplate) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const tag = (document.activeElement?.tagName ?? '').toLowerCase()
-      const isEditable = document.activeElement?.getAttribute('contenteditable') !== null
+      const isEditable = document.activeElement?.hasAttribute('contenteditable') === true
       if (['input', 'textarea', 'select'].includes(tag) || isEditable) return
 
       const key = e.key.toLowerCase()
