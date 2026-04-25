@@ -481,13 +481,59 @@ export function App() {
     }
   }, [activeTool])
 
+  const hasSelection = selectedObject != null
+  const multiSelected = Array.isArray(selectedObject) && selectedObject.length >= 2
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (editorMode !== 'canvas') return
+      if (!selectedTemplate) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase()
+      const isEditable = document.activeElement?.getAttribute('contenteditable') !== null
+      if (['input', 'textarea', 'select'].includes(tag) || isEditable) return
+
+      const key = e.key.toLowerCase()
+
+      if (key === 'v' || e.key === 'Escape') {
+        setActiveTool('select')
+        e.preventDefault()
+      } else if (key === 't') {
+        setActiveTool('text')
+        e.preventDefault()
+      } else if (key === 'r') {
+        setActiveTool('rect')
+        e.preventDefault()
+      } else if (key === 'c') {
+        setActiveTool('circle')
+        e.preventDefault()
+      } else if (key === 'l') {
+        setActiveTool('line')
+        e.preventDefault()
+      } else if (key === 'q') {
+        setActiveTool('qr')
+        e.preventDefault()
+      } else if (key === 'b') {
+        setActiveTool('barcode')
+        e.preventDefault()
+      } else if (key === 'i') {
+        canvasRef.current?.triggerImageUpload()
+        e.preventDefault()
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && hasSelection) {
+        canvasRef.current?.deleteSelected()
+        e.preventDefault()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [editorMode, selectedTemplate, hasSelection])
+
   const handleIconSelect = useCallback((filename: string) => {
     canvasRef.current?.addImage('/icons/' + filename)
     setShowIconModal(false)
   }, [])
 
-  const hasSelection = selectedObject != null
-  const multiSelected = Array.isArray(selectedObject) && selectedObject.length >= 2
 
   return (
     <div className="flex flex-col h-screen bg-[#1a1a1a] text-white overflow-hidden">
@@ -554,6 +600,15 @@ export function App() {
             </div>
           ) : (
             <div className="flex flex-1 overflow-hidden">
+              {editorMode === 'canvas' && (
+                <ToolSidebar
+                  activeTool={activeTool}
+                  onToolChange={setActiveTool}
+                  hasSelection={hasSelection}
+                  onDelete={() => canvasRef.current?.deleteSelected()}
+                  onImageUpload={() => canvasRef.current?.triggerImageUpload()}
+                />
+              )}
               <div className="flex flex-col flex-1 overflow-hidden">
                 {/* Mode toggle + print toolbar */}
                 <div className="flex items-center gap-3 px-3 py-1.5 border-b border-white/10 bg-[#252525] shrink-0">
@@ -592,27 +647,18 @@ export function App() {
                 </div>
 
                 {editorMode === 'canvas' ? (
-                  <div className="flex flex-1 overflow-hidden">
-                    <ToolSidebar
-                      activeTool={activeTool}
-                      onToolChange={setActiveTool}
-                      hasSelection={hasSelection}
-                      onDelete={() => canvasRef.current?.deleteSelected()}
-                      onImageUpload={() => canvasRef.current?.triggerImageUpload()}
-                    />
-                    <LabelCanvas
-                      ref={canvasRef}
-                      template={selectedTemplate}
-                      variableValues={variableValues}
-                      activeTool={activeTool}
-                      labelProfile={labelProfile!}
-                      displayOrientation={selectedTemplate.display_orientation}
-                      onCanvasChange={handleCanvasChange}
-                      onBitmapUpdate={handleBitmapUpdate}
-                      onSelectionChange={handleSelectionChange}
-                      onToolUsed={() => setActiveTool('select')}
-                    />
-                  </div>
+                  <LabelCanvas
+                    ref={canvasRef}
+                    template={selectedTemplate}
+                    variableValues={variableValues}
+                    activeTool={activeTool}
+                    labelProfile={labelProfile!}
+                    displayOrientation={selectedTemplate.display_orientation}
+                    onCanvasChange={handleCanvasChange}
+                    onBitmapUpdate={handleBitmapUpdate}
+                    onSelectionChange={handleSelectionChange}
+                    onToolUsed={() => setActiveTool('select')}
+                  />
                 ) : (
                   <HtmlEditor
                     html={selectedTemplate.html ?? defaultHtmlForProfile(selectedTemplate.label_profile)}
