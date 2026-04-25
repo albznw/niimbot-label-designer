@@ -136,8 +136,17 @@ class PrinterClient {
 
     let canvas = bitmapToCanvas(workBitmap, workWidth, workHeight)
 
-    // Landscape label - rotate 90° CCW before encoding
-    if (bitmapWidth > bitmapHeight) {
+    // Rotate 90° CCW before encoding when needed.
+    // Square originals (double label) must rotate when printing full label (top direction),
+    // but NOT when a half-crop has already been applied (crop gives correct dims).
+    const originalIsSquare = bitmapWidth === bitmapHeight
+    const halfCropApplied = workHeight !== bitmapHeight
+
+    const shouldRotate =
+      (workWidth > workHeight && !(originalIsSquare && halfCropApplied)) ||
+      (workWidth === workHeight && options.printDirection === 'top')
+
+    if (shouldRotate) {
       canvas = rotateCanvas90CCW(canvas)
     }
 
