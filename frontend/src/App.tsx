@@ -342,6 +342,11 @@ export function App() {
     ? getCanvasDims(labelProfile, selectedTemplate.display_orientation)
     : { w: 0, h: 0 }
 
+  // Reset route init when template or route changes
+  useEffect(() => {
+    routeInitDoneRef.current = false
+  }, [templateId, isPreview, isPrint])
+
   // Handle /preview and /print routes: inject URL vars and trigger mode
   useEffect(() => {
     if (!selectedTemplate || routeInitDoneRef.current) return
@@ -465,7 +470,7 @@ export function App() {
     setAutoPrintPending(false)
     const lp = getProfileById(selectedTemplate.label_profile)
     handlePrint(variableValues, {
-      density: 3,
+      density: selectedTemplate.density,
       quantity: 1,
       labelType: lp.labelType,
       printDirection: getEffectivePrintDirection(lp, selectedTemplate.display_orientation ?? 'landscape'),
@@ -762,7 +767,7 @@ export function App() {
                       initialText={selectedTemplate.variable_text ?? ''}
                       printRows={printRows}
                       activePrintRow={activePrintRow}
-                      onPrintRowsChange={handlePrintRowsChange}
+                      onPrintRowsChange={isPreview || isPrint ? () => {} : handlePrintRowsChange}
                       onActivePrintRowChange={setActivePrintRow}
                       syncKey={selectedTemplate.id}
                     />

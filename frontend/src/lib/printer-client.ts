@@ -142,10 +142,13 @@ class PrinterClient {
     const printTask = client.abstraction.newPrintTask('B1', printTaskOptions)
 
     await printTask.printInit()
-    await printTask.printPage(encoded, options.quantity)
-    await printTask.waitForPageFinished()
-    await printTask.waitForFinished()
-    await client.abstraction.printEnd()
+    try {
+      await printTask.printPage(encoded, options.quantity)
+      await printTask.waitForPageFinished()
+      await printTask.waitForFinished()
+    } finally {
+      await client.abstraction.printEnd()
+    }
   }
 }
 

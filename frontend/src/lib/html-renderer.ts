@@ -21,7 +21,6 @@ export async function htmlTo1BitBitmap(
   iframe.style.height = `${h}px`
   iframe.style.border = 'none'
   iframe.style.visibility = 'hidden'
-  iframe.sandbox.add('allow-same-origin')
   iframe.srcdoc = processedHtml
 
   document.body.appendChild(iframe)

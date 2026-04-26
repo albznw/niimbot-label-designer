@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import io
 import json
 import logging
@@ -25,6 +26,9 @@ class TerminalManager:
         self.ws: WebSocket | None = None
 
     async def connect(self, ws: WebSocket) -> None:
+        if self.ws is not None:
+            with contextlib.suppress(Exception):
+                await self.ws.close()
         self.ws = ws
 
     def disconnect(self) -> None:
@@ -55,7 +59,7 @@ app = FastAPI(title="Niimbot Print Relay")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
