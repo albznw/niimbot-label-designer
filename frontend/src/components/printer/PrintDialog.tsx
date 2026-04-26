@@ -170,6 +170,7 @@ export function PrintDialog({
 
   const handlePrint = async () => {
     setInternalPrintError(null)
+    onPrintError?.(null)
     setPrinting(true)
     try {
       if (isBatchMode && onBatchPrint) {
@@ -192,6 +193,7 @@ export function PrintDialog({
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Print failed'
       setInternalPrintError(msg)
+      onPrintError?.(msg)
     } finally {
       setPrinting(false)
     }
