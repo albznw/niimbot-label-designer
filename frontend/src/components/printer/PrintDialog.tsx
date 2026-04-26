@@ -18,6 +18,8 @@ interface PrintDialogProps {
   onBatchPrint?: (rows: Record<string, string>[], options: PrintOptions) => Promise<void>
   onRenderRow?: (vars: Record<string, string>) => Promise<{ bitmap: Uint8Array; w: number; h: number }>
   onClose: () => void
+  printError?: string | null
+  onPrintError?: (err: string | null) => void
 }
 
 const CAROUSEL_MAX = 20
@@ -35,6 +37,8 @@ export function PrintDialog({
   onBatchPrint,
   onRenderRow,
   onClose,
+  printError: externalPrintError,
+  onPrintError,
 }: PrintDialogProps) {
   const [variableValues, setVariableValues] = useState<Record<string, string>>(
     () => initialVariableValues ?? Object.fromEntries(template.variables.map((v) => [v.name, v.default]))
@@ -42,7 +46,7 @@ export function PrintDialog({
   const [density, setDensity] = useState(template.density)
   const [quantity, setQuantity] = useState(1)
   const [printing, setPrinting] = useState(false)
-  const [printError, setPrintError] = useState<string | null>(null)
+  const [internalPrintError, setInternalPrintError] = useState<string | null>(null)
   const [printHalf, setPrintHalf] = useState<'both' | 'top' | 'bottom'>('both')
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -165,7 +169,7 @@ export function PrintDialog({
   const canPrint = printerStatus.connected && (isBatchMode ? selectedRows.length > 0 : currentBitmap !== null) && !printing
 
   const handlePrint = async () => {
-    setPrintError(null)
+    setInternalPrintError(null)
     setPrinting(true)
     try {
       if (isBatchMode && onBatchPrint) {
@@ -186,7 +190,8 @@ export function PrintDialog({
         })
       }
     } catch (e) {
-      setPrintError(e instanceof Error ? e.message : 'Print failed')
+      const msg = e instanceof Error ? e.message : 'Print failed'
+      setInternalPrintError(msg)
     } finally {
       setPrinting(false)
     }
@@ -212,6 +217,12 @@ export function PrintDialog({
           <h2 className="text-sm font-semibold">Print - {template.name}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white text-lg leading-none">×</button>
         </div>
+
+        {(externalPrintError ?? internalPrintError) && (
+          <div className="mx-4 mt-3 px-3 py-2 rounded bg-red-900/60 border border-red-500/50 text-red-300 text-sm">
+            {externalPrintError ?? internalPrintError}
+          </div>
+        )}
 
         <div className="p-5 flex flex-col gap-5">
           {/* Printer status */}
@@ -432,9 +443,6 @@ export function PrintDialog({
             )}
           </div>
 
-          {printError && (
-            <p className="text-xs text-red-400 bg-red-900/20 px-3 py-2 rounded">{printError}</p>
-          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-white/10">

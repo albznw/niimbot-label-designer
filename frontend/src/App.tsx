@@ -71,6 +71,7 @@ export function App() {
   const [connecting, setConnecting] = useState(false)
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   const [autoPrintPending, setAutoPrintPending] = useState(false)
+  const [printError, setPrintError] = useState<string | null>(null)
   const routeInitDoneRef = useRef(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showLabelSettings, setShowLabelSettings] = useState(false)
@@ -355,9 +356,8 @@ export function App() {
     if (Object.keys(urlVars).length > 0) {
       setVariableValues(urlVars)
     }
-    if (isPreview) {
-      setShowPrintDialog(true)
-    } else if (isPrint) {
+    setShowPrintDialog(true)
+    if (isPrint) {
       setAutoPrintPending(true)
     }
   }, [selectedTemplate, isPreview, isPrint, urlVars])
@@ -474,7 +474,9 @@ export function App() {
       quantity: 1,
       labelType: lp.labelType,
       printDirection: getEffectivePrintDirection(lp, selectedTemplate.display_orientation ?? 'landscape'),
-    }).catch(() => {})
+    }).catch((e: unknown) => {
+      setPrintError(e instanceof Error ? e.message : 'Print failed')
+    })
   }, [autoPrintPending, printerStatus.connected, bitmap, selectedTemplate, variableValues, handlePrint])
 
   const handleBatchPrint = useCallback(async (
@@ -837,7 +839,9 @@ export function App() {
           onBatchPrint={handleBatchPrint}
           onRenderRow={isPreview || isPrint ? undefined : handleRenderRow}
           initialVariableValues={variableValues}
-          onClose={() => setShowPrintDialog(false)}
+          printError={printError}
+          onPrintError={setPrintError}
+          onClose={() => { setShowPrintDialog(false); setPrintError(null) }}
         />
       )}
 
