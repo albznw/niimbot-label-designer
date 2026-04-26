@@ -464,10 +464,17 @@ export function App() {
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [bitmap, bitmapDims, selectedTemplate, printerStatus, dims])
 
+  // Show error immediately if auto-print is pending but printer is not connected
+  useEffect(() => {
+    if (!autoPrintPending || printerStatus.connected) return
+    setPrintError('No printer connected')
+  }, [autoPrintPending, printerStatus.connected])
+
   // Execute auto-print as soon as printer is connected and bitmap is ready
   useEffect(() => {
     if (!autoPrintPending || !printerStatus.connected || !bitmap || !selectedTemplate) return
     setAutoPrintPending(false)
+    setPrintError(null)
     const lp = getProfileById(selectedTemplate.label_profile)
     handlePrint(variableValues, {
       density: selectedTemplate.density,
