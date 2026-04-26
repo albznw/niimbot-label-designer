@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useParams, useMatch, useSearchParams, useNavigate } from 'react-router-dom'
 import { wsClient } from './lib/ws-client'
 import type { WsEvent, WsStatus } from './lib/ws-client'
 import * as db from './lib/db'
 import type { Template, Variable } from './types/project'
-import { getProfileById, getCanvasDims } from './types/label'
+import { getProfileById, getCanvasDims, getEffectivePrintDirection } from './types/label'
 import type { LabelProfile } from './types/label'
 import { defaultHtmlForProfile } from './lib/defaults'
 import { printerClient } from './lib/printer-client'
@@ -30,6 +31,18 @@ import { PrintHistory } from './components/history/PrintHistory'
 import { WsStatusDot, SettingsPanel } from './components/settings/SettingsPanel'
 
 export function App() {
+  const { templateId } = useParams<{ templateId?: string }>()
+  const isPreview = !!useMatch('/edit/:templateId/preview')
+  const isPrint = !!useMatch('/edit/:templateId/print')
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+
+  const urlVars = useMemo(() => {
+    const vars: Record<string, string> = {}
+    searchParams.forEach((value, key) => { vars[key] = value })
+    return vars
+  }, [searchParams])
+
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
   const [loadingTemplates, setLoadingTemplates] = useState(true)
@@ -57,6 +70,8 @@ export function App() {
   })
   const [connecting, setConnecting] = useState(false)
   const [showPrintDialog, setShowPrintDialog] = useState(false)
+  const [autoPrintPending, setAutoPrintPending] = useState(false)
+  const routeInitDoneRef = useRef(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showLabelSettings, setShowLabelSettings] = useState(false)
   const [showIconModal, setShowIconModal] = useState(false)
@@ -94,6 +109,13 @@ export function App() {
     if (selectedTemplateId) db.setSetting('lastTemplateId', selectedTemplateId)
   }, [selectedTemplateId])
 
+  // Sync selected template to URL
+  useEffect(() => {
+    if (!selectedTemplateId || isPreview || isPrint) return
+    navigate(`/edit/${selectedTemplateId}`, { replace: true })
+  }, [selectedTemplateId, isPreview, isPrint, navigate])
+
+
   // Init: load templates + settings, connect WS if URL configured
   useEffect(() => {
     async function init() {
@@ -103,7 +125,11 @@ export function App() {
         db.getSetting('backendUrl'),
       ])
       setTemplates(tpls)
-      if (lastId && tpls.some((t) => t.id === lastId)) setSelectedTemplateId(lastId)
+      if (templateId && tpls.some((t) => t.id === templateId)) {
+        setSelectedTemplateId(templateId)
+      } else if (lastId && tpls.some((t) => t.id === lastId)) {
+        setSelectedTemplateId(lastId)
+      }
       if (storedUrl) {
         setBackendUrl(storedUrl)
         connectWs(storedUrl)
@@ -166,7 +192,7 @@ export function App() {
     const rows = selectedTemplate?.print_rows ?? []
     setPrintRows(rows)
     setActivePrintRow(0)
-    setVariableValues(rows[0] ?? {})
+    if (!isPreview && !isPrint) setVariableValues(rows[0] ?? {})
     if (selectedTemplate) {
       setEditorMode(selectedTemplate.mode ?? 'canvas')
     }
@@ -175,10 +201,11 @@ export function App() {
 
   // Sync variableValues from active print row
   useEffect(() => {
+    if (isPreview || isPrint) return
     const row = printRows[activePrintRow] ?? printRows[0] ?? {}
     setVariableValues(row)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePrintRow, printRows])
+  }, [activePrintRow, printRows, isPreview, isPrint])
 
   const handleCreateTemplate = useCallback(async (
     name: string,
@@ -315,6 +342,21 @@ export function App() {
     ? getCanvasDims(labelProfile, selectedTemplate.display_orientation)
     : { w: 0, h: 0 }
 
+  // Handle /preview and /print routes: inject URL vars and trigger mode
+  useEffect(() => {
+    if (!selectedTemplate || routeInitDoneRef.current) return
+    if (!isPreview && !isPrint) return
+    routeInitDoneRef.current = true
+    if (Object.keys(urlVars).length > 0) {
+      setVariableValues(urlVars)
+    }
+    if (isPreview) {
+      setShowPrintDialog(true)
+    } else if (isPrint) {
+      setAutoPrintPending(true)
+    }
+  }, [selectedTemplate, isPreview, isPrint, urlVars])
+
   const handleProfileChange = useCallback(async (presetId: string) => {
     if (!selectedTemplateId) return
     setTemplates((prev) =>
@@ -416,6 +458,19 @@ export function App() {
     setPrintSuccess(`Printed ${options.quantity}x on ${printerName}`)
     setTimeout(() => setPrintSuccess(null), 4000)
   }, [bitmap, bitmapDims, selectedTemplate, printerStatus, dims])
+
+  // Execute auto-print as soon as printer is connected and bitmap is ready
+  useEffect(() => {
+    if (!autoPrintPending || !printerStatus.connected || !bitmap || !selectedTemplate) return
+    setAutoPrintPending(false)
+    const lp = getProfileById(selectedTemplate.label_profile)
+    handlePrint(variableValues, {
+      density: 3,
+      quantity: 1,
+      labelType: lp.labelType,
+      printDirection: getEffectivePrintDirection(lp, selectedTemplate.display_orientation ?? 'landscape'),
+    }).catch(() => {})
+  }, [autoPrintPending, printerStatus.connected, bitmap, selectedTemplate, variableValues, handlePrint])
 
   const handleBatchPrint = useCallback(async (
     rows: Record<string, string>[],
@@ -702,7 +757,7 @@ export function App() {
                       variables={selectedTemplate.variables}
                       values={variableValues}
                       onChange={handleVariablesChange}
-                      onValuesChange={setVariableValues}
+                      onValuesChange={isPreview || isPrint ? () => {} : setVariableValues}
                       onTextChange={handleVariableTextChange}
                       initialText={selectedTemplate.variable_text ?? ''}
                       printRows={printRows}
@@ -772,10 +827,10 @@ export function App() {
           bitmapHeight={bitmapDims.h || dims.h}
           printerStatus={printerStatus}
           labelProfile={labelProfile!}
-          printRows={printRows}
+          printRows={isPreview || isPrint ? [] : printRows}
           onPrint={handlePrint}
           onBatchPrint={handleBatchPrint}
-          onRenderRow={handleRenderRow}
+          onRenderRow={isPreview || isPrint ? undefined : handleRenderRow}
           initialVariableValues={variableValues}
           onClose={() => setShowPrintDialog(false)}
         />
