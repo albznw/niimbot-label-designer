@@ -499,6 +499,30 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
         if (actualFill !== currentFill) t.fill(actualFill)
       })
 
+      // Temporarily substitute variables in QR/barcode nodes (mirror text pattern)
+      const imgRestores: Array<{ node: Konva.Image; original: CanvasImageSource | undefined }> = []
+      const qrBarcodeSwaps = nodesRef.current
+        .filter((n): n is Extract<NodeConfig, { type: 'qr' }> | Extract<NodeConfig, { type: 'barcode' }> =>
+          n.type === 'qr' || n.type === 'barcode'
+        )
+        .map(async (n) => {
+          const resolved = applyVariables(n.content ?? '', vars)
+          if (resolved === (n.content ?? '')) return
+          let dataUrl: string
+          if (n.type === 'qr') {
+            dataUrl = await generateQRDataURL(resolved, n.width, (n as Extract<NodeConfig, { type: 'qr' }>).errorCorrectionLevel)
+          } else {
+            dataUrl = await generateBarcodeDataURLAsync(resolved, n.width, n.height)
+          }
+          const konvaNode = nodeRefs.current.get(n.id)
+          if (!(konvaNode instanceof Konva.Image)) return
+          const img = new window.Image()
+          await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = dataUrl })
+          imgRestores.push({ node: konvaNode, original: konvaNode.image() as CanvasImageSource | undefined })
+          konvaNode.image(img)
+        })
+      await Promise.all(qrBarcodeSwaps)
+
       stage.batchDraw()
 
       try {
@@ -530,6 +554,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
       } finally {
         // Restore
         restores.forEach(({ node, original, fill }) => { node.text(original); node.fill(fill) })
+        imgRestores.forEach(({ node, original }) => { node.image(original) })
         if (transformer && transformerWasVisible) {
           transformer.visible(true)
         }
@@ -564,32 +589,7 @@ export const LabelCanvas = forwardRef<LabelCanvasHandle, LabelCanvasProps>(
     // Re-render bitmap when variable preview values change
     useEffect(() => {
       variableValuesRef.current = variableValues
-      // Regenerate QR/barcode src with substituted variables
-      const qrBarcodeNodes = nodesRef.current.filter(
-        (n) => n.type === 'qr' || n.type === 'barcode'
-      )
-      if (qrBarcodeNodes.length > 0) {
-        qrBarcodeNodes.forEach((n) => {
-          const resolved = applyVariables((n as { content?: string }).content ?? '', variableValues)
-          if (n.type === 'qr') {
-            generateQRDataURL(resolved, n.width, n.errorCorrectionLevel).then((src) => {
-              skipHistoryRef.current = true
-              setNodes((prev) =>
-                prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
-              )
-            })
-          } else {
-            generateBarcodeDataURLAsync(resolved, n.width, n.height).then((src) => {
-              skipHistoryRef.current = true
-              setNodes((prev) =>
-                prev.map((node) => (node.id === n.id ? ({ ...node, src } as NodeConfig) : node))
-              )
-            })
-          }
-        })
-      } else {
-        renderBitmap()
-      }
+      renderBitmap()
     }, [variableValues, renderBitmap])
 
     // Initial bitmap render after mount
