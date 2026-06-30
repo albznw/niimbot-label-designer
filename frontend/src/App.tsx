@@ -84,6 +84,8 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false)
 
   const [toast, setToast] = useState<string | null>(null)
+  const [isDirty, setIsDirty] = useState(false)
+  const [templateLoading, setTemplateLoading] = useState(false)
 
   const canvasRef = useRef<LabelCanvasHandle | null>(null)
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -92,6 +94,7 @@ export function App() {
   const selectedTemplateIdRef = useRef(selectedTemplateId)
   useEffect(() => { selectedTemplateIdRef.current = selectedTemplateId }, [selectedTemplateId])
   const bitmapResolverRef = useRef<((bmp: Uint8Array, w: number, h: number) => void) | null>(null)
+  const hydratingRef = useRef(false)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -182,21 +185,60 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Reset designer state when template changes
+  // Reset designer state when template changes (applies draft overlay first)
   useEffect(() => {
-    setBitmap(null)
-    setSelectedObject(null)
-    setActiveTool('select')
-    setModeSwitchNotice(null)
-    setCanvasNodes([])
-    setCanvasSelectedIds([])
-    const rows = selectedTemplate?.print_rows ?? []
-    setPrintRows(rows)
-    setActivePrintRow(0)
-    if (!isPreview && !isPrint) setVariableValues(rows[0] ?? {})
-    if (selectedTemplate) {
-      setEditorMode(selectedTemplate.mode ?? 'canvas')
+    if (!selectedTemplateId) {
+      setIsDirty(false)
+      setTemplateLoading(false)
+      return
     }
+    const id = selectedTemplateId
+    hydratingRef.current = true
+    setTemplateLoading(true)
+    db.getDraft(id).then(async (draft) => {
+      const committed = await db.getTemplate(id)
+      if (!committed) {
+        setTemplateLoading(false)
+        setIsDirty(false)
+        setTimeout(() => { hydratingRef.current = false }, 800)
+        return
+      }
+      const effective = draft ? { ...committed, ...draft.data } : committed
+      setTemplates((prev) => prev.map((t) => t.id === id ? effective : t))
+      const rows = effective.print_rows ?? []
+      setBitmap(null)
+      setSelectedObject(null)
+      setActiveTool('select')
+      setModeSwitchNotice(null)
+      setCanvasNodes([])
+      setCanvasSelectedIds([])
+      setPrintRows(rows)
+      setActivePrintRow(0)
+      if (!isPreview && !isPrint) setVariableValues(rows[0] ?? {})
+      setEditorMode(effective.mode ?? 'canvas')
+      setIsDirty(draft !== null)
+      setTemplateLoading(false)
+      setTimeout(() => { hydratingRef.current = false }, 800)
+    }).catch(() => {
+      // fallback: reset without draft
+      const base = templates.find((t) => t.id === id)
+      if (base) {
+        const rows = base.print_rows ?? []
+        setPrintRows(rows)
+        setActivePrintRow(0)
+        if (!isPreview && !isPrint) setVariableValues(rows[0] ?? {})
+        setEditorMode(base.mode ?? 'canvas')
+      }
+      setBitmap(null)
+      setSelectedObject(null)
+      setActiveTool('select')
+      setModeSwitchNotice(null)
+      setCanvasNodes([])
+      setCanvasSelectedIds([])
+      setIsDirty(false)
+      setTemplateLoading(false)
+      setTimeout(() => { hydratingRef.current = false }, 800)
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplateId])
 
@@ -258,9 +300,11 @@ export function App() {
     setCanvasNodes(nodes)
     const ids = canvasRef.current?.getSelectedIds() ?? []
     setCanvasSelectedIds(ids)
+    if (hydratingRef.current) return
+    setIsDirty(true)
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      db.updateTemplate(selectedTemplateId, { canvas_json: json })
+      db.saveDraft(selectedTemplateId, { canvas_json: json })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 500)
   }, [selectedTemplateId])
@@ -270,9 +314,11 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, html } : t)
     )
+    if (hydratingRef.current) return
+    setIsDirty(true)
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
-      db.updateTemplate(selectedTemplateId, { html })
+      db.saveDraft(selectedTemplateId, { html })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 500)
   }, [selectedTemplateId])
@@ -304,7 +350,7 @@ export function App() {
     varSaveDebounceRef.current = setTimeout(() => {
       const patch = pendingVarData.current
       pendingVarData.current = {}
-      db.updateTemplate(id, patch)
+      db.saveDraft(id, patch)
         .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
     }, 500)
   }, [])
@@ -314,6 +360,8 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, variables: vars } : t)
     )
+    if (hydratingRef.current) return
+    setIsDirty(true)
     pendingVarData.current.variables = vars
     flushVarSave(selectedTemplateId)
   }, [selectedTemplateId, flushVarSave])
@@ -323,6 +371,8 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, variable_text: text } : t)
     )
+    if (hydratingRef.current) return
+    setIsDirty(true)
     pendingVarData.current.variable_text = text
     flushVarSave(selectedTemplateId)
   }, [selectedTemplateId, flushVarSave])
@@ -333,6 +383,8 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, print_rows: rows } : t)
     )
+    if (hydratingRef.current) return
+    setIsDirty(true)
     pendingVarData.current.print_rows = rows
     flushVarSave(selectedTemplateId)
   }, [selectedTemplateId, flushVarSave])
@@ -367,7 +419,8 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, label_profile: presetId } : t)
     )
-    await db.updateTemplate(selectedTemplateId, { label_profile: presetId })
+    setIsDirty(true)
+    await db.saveDraft(selectedTemplateId, { label_profile: presetId })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
   }, [selectedTemplateId])
 
@@ -378,7 +431,8 @@ export function App() {
     setTemplates((prev) =>
       prev.map((t) => t.id === selectedTemplateId ? { ...t, ...patch } : t)
     )
-    await db.updateTemplate(selectedTemplateId, patch)
+    setIsDirty(true)
+    await db.saveDraft(selectedTemplateId, patch)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
   }, [selectedTemplateId])
 
@@ -391,10 +445,59 @@ export function App() {
     setModeSwitchNotice(notice)
     setEditorMode(nextMode)
     setBitmap(null)
-    db.updateTemplate(selectedTemplateId, { mode: nextMode })
+    setIsDirty(true)
+    db.saveDraft(selectedTemplateId, { mode: nextMode })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save mode'))
     setTimeout(() => setModeSwitchNotice(null), 4000)
   }, [editorMode, selectedTemplateId, selectedTemplate])
+
+  const handleSaveTemplate = useCallback(async () => {
+    if (!selectedTemplateId || !selectedTemplate) return
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
+    if (varSaveDebounceRef.current) clearTimeout(varSaveDebounceRef.current)
+    const patch: Partial<Template> = {
+      canvas_json: selectedTemplate.canvas_json,
+      html: selectedTemplate.html,
+      variables: selectedTemplate.variables,
+      variable_text: selectedTemplate.variable_text,
+      print_rows: selectedTemplate.print_rows,
+      label_profile: selectedTemplate.label_profile,
+      display_orientation: selectedTemplate.display_orientation,
+      density: selectedTemplate.density,
+      corner_style: selectedTemplate.corner_style,
+      mode: selectedTemplate.mode,
+    }
+    await db.updateTemplate(selectedTemplateId, patch)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to save'))
+    await db.deleteDraft(selectedTemplateId)
+      .catch(() => { /* non-fatal */ })
+    setIsDirty(false)
+    showToast('Saved')
+  }, [selectedTemplateId, selectedTemplate, showToast])
+
+  const handleRevertTemplate = useCallback(async () => {
+    if (!selectedTemplateId) return
+    if (!window.confirm('Discard unsaved changes and revert to the last saved version?')) return
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
+    if (varSaveDebounceRef.current) clearTimeout(varSaveDebounceRef.current)
+    await db.deleteDraft(selectedTemplateId)
+      .catch(() => { /* non-fatal */ })
+    const committed = await db.getTemplate(selectedTemplateId)
+    if (!committed) return
+    setTemplates((prev) => prev.map((t) => t.id === selectedTemplateId ? committed : t))
+    const rows = committed.print_rows ?? []
+    setBitmap(null)
+    setSelectedObject(null)
+    setActiveTool('select')
+    setModeSwitchNotice(null)
+    setCanvasNodes([])
+    setCanvasSelectedIds([])
+    setPrintRows(rows)
+    setActivePrintRow(0)
+    setVariableValues(rows[0] ?? {})
+    setEditorMode(committed.mode ?? 'canvas')
+    setIsDirty(false)
+  }, [selectedTemplateId])
 
   // Printer handlers
   const handleConnectBLE = useCallback(async () => {
@@ -639,6 +742,29 @@ export function App() {
           onImport={handleImportTemplate}
           loading={loadingTemplates}
         />
+        {selectedTemplate && (
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleSaveTemplate}
+              className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-white/10 transition-colors ${
+                isDirty
+                  ? 'bg-accent hover:bg-accent/80 text-white'
+                  : 'bg-[#333] hover:bg-[#444] text-gray-300'
+              }`}
+            >
+              {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-white inline-block" />}
+              Save
+            </button>
+            {isDirty && (
+              <button
+                onClick={handleRevertTemplate}
+                className="text-xs px-3 py-1.5 bg-[#333] hover:bg-[#444] text-gray-400 hover:text-gray-200 rounded border border-white/10 transition-colors"
+              >
+                Revert
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex-1" />
         <WsStatusDot status={wsStatus} onClick={() => setShowSettings(true)} />
         <PrinterPanel
@@ -734,7 +860,9 @@ export function App() {
                   </button>
                 </div>
 
-                {editorMode === 'canvas' ? (
+                {templateLoading ? (
+                  <div className="flex-1" />
+                ) : editorMode === 'canvas' ? (
                   <LabelCanvas
                     ref={canvasRef}
                     template={selectedTemplate}

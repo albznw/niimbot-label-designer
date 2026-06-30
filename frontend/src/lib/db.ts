@@ -1,7 +1,7 @@
 import type { Template } from '../types/project'
 
 const DB_NAME = 'niimbot-designer'
-const DB_VERSION = 4
+const DB_VERSION = 5
 
 export interface PrintJobRecord {
   id: string
@@ -19,6 +19,12 @@ export interface PrintHistoryResponse {
   total: number
   page: number
   per_page: number
+}
+
+export interface DraftRecord {
+  id: string
+  data: Partial<Template>
+  updated_at: string
 }
 
 function genId(): string {
@@ -62,6 +68,9 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains('print_history')) {
           const hs = db.createObjectStore('print_history', { keyPath: 'id' })
           hs.createIndex('printed_at', 'printed_at', { unique: false })
+        }
+        if (!db.objectStoreNames.contains('drafts')) {
+          db.createObjectStore('drafts', { keyPath: 'id' })
         }
 
         const tx = (e.target as IDBOpenDBRequest).transaction
@@ -135,6 +144,8 @@ function openDb(): Promise<IDBDatabase> {
             cursor.continue()
           }
         }
+
+        // v4 → v5: drafts store created above; no data migration needed
       }
     })
   }
@@ -187,6 +198,26 @@ export async function updateTemplate(id: string, data: Partial<Template>): Promi
 
 export async function deleteTemplate(id: string): Promise<void> {
   await tx<undefined>('templates', 'readwrite', (store) => store.delete(id) as IDBRequest<undefined>)
+}
+
+// Drafts
+export async function saveDraft(id: string, patch: Partial<Template>): Promise<void> {
+  const existing = await getDraft(id)
+  const merged: DraftRecord = {
+    id,
+    data: { ...(existing?.data ?? {}), ...patch },
+    updated_at: new Date().toISOString(),
+  }
+  await tx('drafts', 'readwrite', (store) => store.put(merged))
+}
+
+export async function getDraft(id: string): Promise<DraftRecord | null> {
+  const result = await tx<DraftRecord | undefined>('drafts', 'readonly', (store) => store.get(id))
+  return result ?? null
+}
+
+export async function deleteDraft(id: string): Promise<void> {
+  await tx<undefined>('drafts', 'readwrite', (store) => store.delete(id) as IDBRequest<undefined>)
 }
 
 // Settings
