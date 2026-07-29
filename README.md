@@ -59,6 +59,24 @@ The backend relay acts as a shared print queue. Your browser (with the printer c
 
 **Example:** the label designer is open on your desktop with the printer connected. From a script on another machine, POST a print job to `http://192.168.1.50:8000/queue`. The frontend receives it over WebSocket and prints without any manual intervention.
 
+## Container images
+
+Both services are published to GitHub Container Registry on every push to `main`:
+
+| Image | Tags |
+|-------|------|
+| `ghcr.io/albznw/niimbot-label-designer/frontend` | `latest`, `sha-<short>`, `v*` semver |
+| `ghcr.io/albznw/niimbot-label-designer/backend` | `latest`, `sha-<short>`, `v*` semver |
+
+`latest` tracks `main`. Pushing a `v*` git tag additionally publishes `{{version}}`, `{{major}}.{{minor}}`, and `{{major}}` (the bare major is skipped for `v0.x`, where minor bumps may break). For reproducible deploys, pin to `sha-<short>` or a semver tag rather than `latest`.
+
+```bash
+docker compose -f compose.ghcr.yml pull
+docker compose -f compose.ghcr.yml up -d
+```
+
+**Serve the frontend over HTTPS.** Web Bluetooth and Web Serial are only exposed in a secure context, so on plain HTTP over a LAN hostname the browser cannot reach the printer at all. Put it behind a reverse proxy with TLS, or use `localhost`.
+
 ## Development
 
 ```bash

@@ -1,0 +1,26 @@
+# Runs the published GHCR images instead of building locally.
+#
+#   docker compose -f compose.ghcr.yml pull
+#   docker compose -f compose.ghcr.yml up -d
+#
+# Pin to an immutable tag instead of `latest` for reproducible deploys, e.g.
+# `:v0.1.0` or `:sha-abc1234`. Both tags are published by
+# .github/workflows/build-and-push.yml.
+
+services:
+  frontend:
+    image: ghcr.io/albznw/niimbot-label-designer/frontend:latest
+    restart: unless-stopped
+    ports:
+      - 3001:80
+
+  backend:
+    image: ghcr.io/albznw/niimbot-label-designer/backend:latest
+    restart: unless-stopped
+    ports:
+      - 8000:8000
+
+# The printer is driven from the browser over Web Bluetooth / Web Serial, so the
+# frontend must be served over HTTPS (or localhost) for those APIs to be
+# available. Put it behind your reverse proxy with TLS rather than hitting the
+# published port directly.
